@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="css/theme.css" />
 </head>
 <body>
+
 <div id="app">
   <!-- 标签栏 -->
   <nav class="tabbar" id="tabbar">
@@ -22,6 +23,15 @@
   </nav>
 
   <main class="content" id="content">
+    <!-- 内嵌进度条：压制时常驻（批量压制上方），收起详情后仍可见 -->
+    <div id="inlineProgress">
+      <span class="ip-dot"></span>
+      <span id="ipTitle">—</span>
+      <div class="ip-bar"><div id="ipBar"></div></div>
+      <span id="ipPct">0%</span>
+      <button class="btn small" id="ipOpen">详情</button>
+      <button class="btn small" id="ipCancel">取消</button>
+    </div>
 
     <!-- ============ 视频 ============ -->
     <section class="tab-page active" id="tab-video">

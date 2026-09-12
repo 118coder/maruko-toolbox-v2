@@ -2,14 +2,14 @@
 
 import { invoke, pickFile } from '../bridge.js';
 import { $, bindFileField, makeListBox, toast } from '../components.js';
-import { state, saveSettings } from '../state.js';
+import { state, saveSettings, audioEncoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
 
 let batch;
 
 export function initAudio() {
   bindFileField($('#aInput'), { kind: 'audio', title: '选择音频' });
-  bindFileField($('#aOutput'), { kind: 'audio', title: '选择输出文件', save: true });
+  bindFileField($('#aOutput'), { kind: 'audio', title: '选择输出文件', save: true, onSet: () => { $('#aOutput').dataset.auto = ''; } });
   $('#aPickInput').addEventListener('click', () => $('#aInput').click());
   $('#aPickOutput').addEventListener('click', () => $('#aOutput').click());
 
@@ -24,6 +24,10 @@ export function initAudio() {
     sel.appendChild(o);
   }
   sel.value = state.audio.encoder;
+
+  // 输出名自动生成：源目录/名+编码器标签+扩展名（测试.wav → 测试nero.m4a）
+  $('#aInput').addEventListener('change', autoFillOutput);
+  $('#aEncoder').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); });
 
   // 模式切换
   for (const r of document.querySelectorAll('input[name=amode]')) {
@@ -88,6 +92,21 @@ export function initAudio() {
   });
 }
 
+function isAutoOutput() {
+  return $('#aOutput').dataset.auto === '1';
+}
+
+function autoFillOutput() {
+  const input = $('#aInput').value;
+  if (!input) return;
+  $('#aOutput').value = taggedName(input, audioEncoderTag($('#aEncoder').value), outputExtOf($('#aEncoder').value));
+  $('#aOutput').dataset.auto = '1';
+}
+
+function outputExtOf(enc) {
+  return ({ neroaac: 'm4a', qaac: 'm4a', fdkaac: 'm4a', lame: 'mp3', flac: 'flac', ffmpeg_aac: 'm4a' })[enc] || 'm4a';
+}
+
 function buildJob(input, output) {
   const mode = document.querySelector('input[name=amode]:checked').value;
   return {
@@ -102,4 +121,8 @@ function buildJob(input, output) {
 
 export function handleDrop(paths) {
   for (const p of paths) batch.add(p);
+  if (paths[0] && !$('#aInput').value) {
+    $('#aInput').value = paths[0];
+    $('#aInput').dispatchEvent(new Event('change'));
+  }
 }

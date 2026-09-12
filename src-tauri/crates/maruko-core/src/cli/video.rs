@@ -129,6 +129,26 @@ pub fn encode_args(job: &VideoJob, ctx: &VideoCtx, pass: Option<u32>, x264: bool
     a
 }
 
+/// 编码器命名标签（对齐原版：测试.mp4 → 测试x264.mp4 / 测试x265.mp4）。
+pub fn encoder_tag(id: &str) -> &'static str {
+    if id.starts_with("x264") {
+        return "x264";
+    }
+    if id.starts_with("x265") {
+        return "x265";
+    }
+    if id.contains("nvenc") {
+        return "nvenc";
+    }
+    if id.contains("qsv") {
+        return "qsv";
+    }
+    if id.contains("amf") {
+        return "amf";
+    }
+    ""
+}
+
 pub fn fmt_crf(crf: f64) -> String {
     if (crf - crf.round()).abs() < f64::EPSILON {
         format!("{}", crf.round() as i64)
@@ -487,6 +507,15 @@ mod tests {
     fn test_fps_decimal() {
         assert_eq!(fps_decimal("24000/1001"), "23.976");
         assert_eq!(fps_decimal("25"), "25");
+    }
+
+    #[test]
+    fn test_encoder_tag() {
+        assert_eq!(encoder_tag("x264_64-8bit.exe"), "x264");
+        assert_eq!(encoder_tag("x265_64-10bit[gcc].exe"), "x265");
+        assert_eq!(encoder_tag("hevc_nvenc"), "nvenc");
+        assert_eq!(encoder_tag("h264_qsv"), "qsv");
+        assert_eq!(encoder_tag("hevc_amf"), "amf");
     }
 
     #[test]

@@ -90,6 +90,46 @@ pub fn split_args(s: &str) -> Vec<String> {
     out
 }
 
+/// 带编码器标签的输出命名：源目录/名.扩展名 → 源目录/名 + 标签 + .扩展名
+/// （对齐原版：测试.mp4 + x264 → 测试x264.mp4），重名追加 _2/_3…
+pub fn tagged_output(input: &str, ext: &str, tag: &str) -> String {
+    let p = std::path::Path::new(input);
+    let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "output".to_string());
+    let mut candidate = dir.join(format!("{}{}.{}", stem, tag, ext));
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = dir.join(format!("{}{}_{}.{}", stem, tag, n, ext));
+        n += 1;
+    }
+    candidate.to_string_lossy().to_string()
+}
+
+/// 已有明确输出路径时防覆盖：存在则追加 _2/_3…
+pub fn deconflict(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return path.to_string();
+    }
+    let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = p.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let mut n = 2;
+    loop {
+        let cand = dir.join(format!("{}_{}.{}", stem, n, ext));
+        if !cand.exists() {
+            return cand.to_string_lossy().to_string();
+        }
+        n += 1;
+    }
+}
+
 /// 输出文件自动命名：源目录同名 + 新扩展名，重名追加 _2/_3…（fs 部分，供 commands 调用）。
 pub fn auto_output(input: &str, ext: &str, tag: &str) -> String {
     let p = std::path::Path::new(input);

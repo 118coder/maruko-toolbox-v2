@@ -95,6 +95,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::ui_ready,
+            commands::log_frontend,
             commands::get_settings,
             commands::save_settings,
             commands::reset_settings,
@@ -102,6 +103,7 @@ pub fn run() {
             commands::check_ffmpeg_features,
             commands::pick_file,
             commands::pick_folder,
+            commands::file_exists,
             commands::open_path,
             commands::mediainfo_analyze,
             commands::encode_video,

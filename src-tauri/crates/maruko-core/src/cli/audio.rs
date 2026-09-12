@@ -26,6 +26,19 @@ impl Default for AudioJob {
     }
 }
 
+/// 音频编码器命名标签：测试.wav + NeroAAC → 测试nero.m4a
+pub fn encoder_tag(encoder: &str) -> &'static str {
+    match encoder {
+        "neroaac" => "nero",
+        "qaac" => "qaac",
+        "fdkaac" => "fdk",
+        "lame" => "lame",
+        "flac" => "flac",
+        "ffmpeg_aac" => "aac",
+        _ => "audio",
+    }
+}
+
 pub fn output_ext(encoder: &str) -> &'static str {
     match encoder {
         "lame" => "mp3",
@@ -42,9 +55,9 @@ pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, temp_base: &st
         return Err("未选择输入音频".into());
     }
     let output = if job.output.is_empty() {
-        super::auto_output(&job.input, output_ext(&job.encoder), "")
+        super::tagged_output(&job.input, output_ext(&job.encoder), encoder_tag(&job.encoder))
     } else {
-        job.output.clone()
+        super::deconflict(&job.output)
     };
     let mut steps = Vec::new();
 
@@ -256,6 +269,13 @@ mod tests {
         let j = AudioJob { input: "a.wav".into(), output: "o.m4a".into(), encoder: "fdkaac".into(), mode: "custom".into(), custom: "-m 3".into(), ..Default::default() };
         let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
         assert!(st[1].args.contains(&"-m".to_string()));
+    }
+
+    #[test]
+    fn test_encoder_tag() {
+        assert_eq!(encoder_tag("neroaac"), "nero");
+        assert_eq!(encoder_tag("qaac"), "qaac");
+        assert_eq!(encoder_tag("fdkaac"), "fdk");
     }
 
     #[test]

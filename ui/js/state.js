@@ -44,6 +44,30 @@ export function videoEncoderOptions() {
   return opts;
 }
 
+/** 编码器命名标签（与后端 cli::video::encoder_tag 对齐）：测试.mp4 → 测试x264.mp4 */
+export function encoderTag(id) {
+  if (!id) return '';
+  if (id.startsWith('x264')) return 'x264';
+  if (id.startsWith('x265')) return 'x265';
+  if (id.includes('nvenc')) return 'nvenc';
+  if (id.includes('qsv')) return 'qsv';
+  if (id.includes('amf')) return 'amf';
+  return '';
+}
+
+/** 音频编码器命名标签（与后端对齐）：测试.wav + NeroAAC → 测试nero.m4a */
+export function audioEncoderTag(id) {
+  return ({ neroaac: 'nero', qaac: 'qaac', fdkaac: 'fdk', lame: 'lame', flac: 'flac', ffmpeg_aac: 'aac' })[id] || 'audio';
+}
+
+/** 源目录 + 名 + 标签 + 扩展名 */
+export function taggedName(input, tag, ext) {
+  if (!input) return '';
+  const dir = input.replace(/[^\\/]+$/, '');
+  const stem = input.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+  return dir + stem + tag + '.' + ext;
+}
+
 export function isGpu(id) {
   return /^(h264|hevc|av1)_(nvenc|qsv|amf)/.test(id);
 }

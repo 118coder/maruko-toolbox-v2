@@ -1,8 +1,8 @@
 // tabs/video.js —— 视频压制页
 
 import { invoke } from '../bridge.js';
-import { $, bindFileField, makeListBox, initNumBoxes, toast } from '../components.js';
-import { state, videoEncoderOptions, isGpu, saveSettings } from '../state.js';
+import { $, bindFileField, makeListBox, initNumBoxes, toast, setFieldValue } from '../components.js';
+import { state, videoEncoderOptions, isGpu, saveSettings, encoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
 
 let batch;
@@ -10,11 +10,26 @@ let batch;
 export function initVideo() {
   // 文件字段
   bindFileField($('#vVideo'), { kind: 'video', title: '选择视频' });
-  bindFileField($('#vOutput'), { kind: 'video', title: '选择输出文件', save: true });
+  bindFileField($('#vOutput'), { kind: 'video', title: '选择输出文件', save: true, onSet: () => { $('#vOutput').dataset.auto = ''; } });
   bindFileField($('#vSubtitle'), { kind: 'subtitle', title: '选择字幕文件' });
   $('#vPickVideo').addEventListener('click', () => $('#vVideo').click());
   $('#vPickOutput').addEventListener('click', () => $('#vOutput').click());
   $('#vPickSubtitle').addEventListener('click', () => $('#vSubtitle').click());
+
+  // 输出名自动生成：源目录/名+编码器标签+容器（测试.mp4 → 测试x264.mp4）
+  // 用户手动选择过输出后不再覆盖（dataset.auto 清空），直到下次输入变化
+  $('#vVideo').addEventListener('change', autoFillOutput);
+  $('#vEncoder').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); refreshGpuHint(); });
+  $('#vContainer').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); });
+
+  // 保持原分辨率 → 宽/高锁定
+  const setResLocked = () => {
+    const dis = $('#vKeepRes').checked;
+    $('#vWidth').disabled = dis;
+    $('#vHeight').disabled = dis;
+  };
+  $('#vKeepRes').addEventListener('change', setResLocked);
+  setResLocked();
 
   initNumBoxes();
 
@@ -88,11 +103,13 @@ export function initVideo() {
     const files = batch.all();
     if (!files.length) return toast('批量列表为空', 'err');
     const container = $('#vContainer').value;
+    const tag = encoderTag($('#vEncoder').value);
     const suffix = $('#vBurnSub').checked ? $('#vSubSuffix').value : 'none';
     const jobs = files.map((f) => {
+      const stem = f.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
       const out = state.batchOutputDir
-        ? state.batchOutputDir.replace(/[\\/]+$/, '') + '\\' + f.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '') + '.' + container
-        : '';
+        ? state.batchOutputDir.replace(/[\\/]+$/, '') + '\\' + stem + tag + '.' + container
+        : taggedName(f, tag, container);
       return buildJob(f, out, container);
     });
     try {
@@ -102,6 +119,21 @@ export function initVideo() {
       toast(String(e), 'err');
     }
   });
+}
+
+function isAutoOutput() {
+  return $('#vOutput').dataset.auto === '1';
+}
+
+function autoFillOutput() {
+  const input = $('#vVideo').value;
+  if (!input) return;
+  $('#vOutput').value = taggedName(input, encoderTag($('#vEncoder').value), $('#vContainer').value);
+  $('#vOutput').dataset.auto = '1';
+}
+
+function refreshGpuHint() {
+  $('#vEncoder').title = isGpu($('#vEncoder').value) ? 'GPU 编码器：不支持 2Pass 与 AVS 滤镜管线' : '';
 }
 
 function buildJob(input, output, containerOverride) {
@@ -162,25 +194,25 @@ export function refreshEncoders() {
     sel.appendChild(o);
   }
   if (cur && opts.some((e) => e.id === cur)) sel.value = cur;
-  // GPU 2Pass 禁用提示
-  sel.title = isGpu(sel.value) ? 'GPU 编码器：不支持 2Pass 与 AVS 滤镜管线' : '';
+  refreshGpuHint();
+  if (isAutoOutput()) autoFillOutput();
 }
 
 /** 全局拖放进入本页时：把文件路径分配到对应字段 */
 export function handleDrop(paths, target) {
   const map = { vVideo: 'video', vBatch: 'batch', vSubtitle: 'subtitle' };
   if (target === 'vSubtitle') {
-    $('#vSubtitle').value = paths[0];
+    setFieldValue($('#vSubtitle'), paths[0]);
   } else if (target === 'vBatch') {
     for (const p of paths) batch.add(p);
   } else if (target === 'vVideo' || target === 'vVideoAny') {
-    $('#vVideo').value = paths[0];
+    setFieldValue($('#vVideo'), paths[0]);
     if (paths.length > 1) {
       for (const p of paths) batch.add(p);
     }
   } else {
     // 默认：第一个进视频，其余进批量
-    $('#vVideo').value = paths[0];
+    setFieldValue($('#vVideo'), paths[0]);
     for (const p of paths.slice(1)) batch.add(p);
   }
 }

@@ -15,6 +15,7 @@ import * as mediainfo from './tabs/mediainfo.js';
 import * as settings from './tabs/settings.js';
 import * as help from './tabs/help.js';
 
+
 // 全局音频参数共享（视频页 / 音频页 / AVS 页共用）
 state.audio = { encoder: 'neroaac', bitrate: 128, custom: '', mode: 'copy' };
 
@@ -35,7 +36,17 @@ function dropTarget(x, y) {
   return page?.dataset.dropDefault || null;
 }
 
+// 禁用 WebView2 默认右键菜单（避免出现网页相关菜单项）
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
 async function boot() {
+  // 启动错误上报到后端日志
+  window.addEventListener('error', (ev) => {
+    invoke('log_frontend', { message: `前端错误: ${ev.message} @ ${ev.filename}:${ev.lineno}` }).catch(() => {});
+  });
+  window.addEventListener('unhandledrejection', (ev) => {
+    invoke('log_frontend', { message: `未处理的Promise: ${ev.reason}` }).catch(() => {});
+  });
   await loadSettings();
   applyLanguage(state.settings.language);
   document.documentElement.classList.toggle('dark', !!state.settings.dark);
@@ -86,5 +97,7 @@ async function boot() {
 }
 
 boot().catch((e) => {
+  invoke('log_frontend', { message: `boot失败: ${e}
+${e?.stack || ''}` }).catch(() => {});
   document.body.innerHTML = `<pre style="color:#e54d42;padding:20px;font-family:monospace">启动失败：${e}\n${e?.stack || ''}</pre>`;
 });

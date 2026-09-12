@@ -41,3 +41,15 @@
 
 ### 其他改进
 - 任务日志全部持久化到 logs/maruko-v2.log（对齐原版日志习惯，排障利器）
+
+### UX 迭代（用户反馈）
+1. **输出自动命名**：文件拖入/选入后，输出框自动填 源目录/名+编码器标签+容器（测试.mp4 + x265 → 测试x265.mp4；音频 → 测试nero.m4a；一图流/截取/旋转/封装同理）。手动选过输出后不再覆盖，换输入或编码器时自动刷新；后端对重名自动 _2/_3 防覆盖（tagged_output/deconflict，含单元测试）
+2. **内嵌进度条**：压制时批量压制上方常驻一条粘性进度条（任务名+进度+百分比+详情/取消）；点「收起」只收起详情弹窗，进度条不再消失，点「详情」随时展开
+3. **保持原分辨率锁定宽高**：勾选时宽度/高度输入框禁用（置灰）
+
+### 启动卡死 bug 诊断（diagnosing-bugs 流程）
+- 症状：应用卡在启动画面，Rust 日志正常但前端 main.js 从未执行
+- 反馈环：debug_loop.sh 自动 启动→等18s→grep 日志判定 RED/GREEN，并在链路每环埋 [DEBUG-m1] 标记
+- 定位：index.html 加载 OK、Tauri IPC 注入 OK、main.js 模块从未执行 → 窗口级 error 监听捕获 `SyntaxError: Identifier 'out' has already been declared @ video.js:111`
+- 根因：行级补丁把批量提交块改坏（重复 const out + 丢失 return buildJob）
+- 修复 + 回归缝隙：所有 ui/js 文件纳入 node --check 语法检查；埋点全部清理

@@ -1,7 +1,7 @@
 // tabs/mux.js —— 封装页（MP4 / MKV / 封装转换）
 
 import { invoke, pickFile } from '../bridge.js';
-import { $, bindFileField, makeListBox, toast } from '../components.js';
+import { $, bindFileField, makeListBox, toast, setFieldValue } from '../components.js';
 import { state } from '../state.js';
 import { trackJob } from '../jobs.js';
 
@@ -11,7 +11,14 @@ export function initMux() {
   // MP4
   bindFileField($('#m4Video'), { kind: 'video', title: '选择视频' });
   bindFileField($('#m4Audio'), { kind: 'audio', title: '选择音频' });
-  bindFileField($('#m4Output'), { kind: 'video', title: '选择输出文件', save: true });
+  bindFileField($('#m4Output'), { kind: 'video', title: '选择输出文件', save: true, onSet: () => { $('#m4Output').dataset.auto = ''; } });
+  $('#m4Video').addEventListener('change', () => {
+    const v = $('#m4Video').value;
+    if (v && $('#m4Output').dataset.auto !== '0') {
+      $('#m4Output').value = v.replace(/\.[^.]+$/, '') + '封装.mp4';
+      $('#m4Output').dataset.auto = '1';
+    }
+  });
   for (const id of ['m4Video', 'm4Audio', 'm4Output']) {
     $('#id_' + id) // no-op 占位，按钮点击触发字段点击
   }
@@ -56,7 +63,14 @@ export function initMux() {
   bindFileField($('#mkVideo'), { kind: 'video', title: '选择视频' });
   bindFileField($('#mkAudio'), { kind: 'audio', title: '选择音频' });
   bindFileField($('#mkSub'), { kind: 'subtitle', title: '选择字幕' });
-  bindFileField($('#mkOutput'), { kind: 'video', title: '选择输出文件', save: true });
+  bindFileField($('#mkOutput'), { kind: 'video', title: '选择输出文件', save: true, onSet: () => { $('#mkOutput').dataset.auto = ''; } });
+  $('#mkVideo').addEventListener('change', () => {
+    const v = $('#mkVideo').value;
+    if (v && $('#mkOutput').dataset.auto !== '0') {
+      $('#mkOutput').value = v.replace(/\.[^.]+$/, '') + '封装.mkv';
+      $('#mkOutput').dataset.auto = '1';
+    }
+  });
   $('#mkPickVideo').addEventListener('click', () => $('#mkVideo').click());
   $('#mkPickAudio').addEventListener('click', () => $('#mkAudio').click());
   $('#mkPickSub').addEventListener('click', () => $('#mkSub').click());
@@ -108,8 +122,8 @@ export function handleDrop(paths, target) {
   if (!first) return;
   if (target === 'm4Video' || target === 'mkVideo' || target === 'cvBatch') {
     if (target === 'cvBatch') { for (const p of paths) cvBatch.add(p); }
-    else $(`#${target}`).value = first;
+    else setFieldValue($(`#${target}`), first);
   } else if (/\.mp4$|\.mkv$|\.mov$|\.avi$/i.test(first)) {
-    $('#m4Video').value = first;
+    setFieldValue($('#m4Video'), first);
   }
 }

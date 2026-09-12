@@ -40,8 +40,10 @@ export function bindFileField(field, { kind = 'all', title = '选择文件', sav
   field.addEventListener('click', async () => {
     const p = kind === 'folder' ? await pickFolder(title) : await pickFile(title, FILTERS[kind] || FILTERS.all, save);
     if (p) {
-      field.value = p;
       onSet?.(p);
+      field.value = p;
+      // 统一触发 change：输出自动命名联动依赖它
+      field.dispatchEvent(new Event('change'));
     }
   });
 }
@@ -49,7 +51,12 @@ export function bindFileField(field, { kind = 'all', title = '选择文件', sav
 // 把系统级拖放事件路由到指定字段（由 main.js 的全局 drop 驱动）
 export function setFieldFromDrop(field, paths) {
   if (!paths?.length) return;
-  field.value = paths[0];
+  setFieldValue(field, paths[0]);
+}
+
+/** 统一赋值入口：总是触发 change（自动命名联动依赖它） */
+export function setFieldValue(field, v) {
+  field.value = v;
   field.dispatchEvent(new Event('change'));
 }
 

@@ -174,6 +174,11 @@ pub async fn pick_folder(app: AppHandle, title: String) -> Result<Option<String>
 }
 
 #[tauri::command]
+pub fn file_exists(path: String) -> bool {
+    PathBuf::from(&path).exists()
+}
+
+#[tauri::command]
 pub fn open_path(path: String, reveal: Option<bool>) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
@@ -272,8 +277,16 @@ fn prepare_video_job(
     let tools = state.tools();
     let info = probe_video(state, &job.input)?;
 
+    // 输出命名：空 → 源目录/名+编码器标签+容器（测试.mp4 → 测试x264.mp4）；
+    // 非空 → 防覆盖冲突（存在则 _2/_3）
     if job.output.is_empty() {
-        job.output = cli::auto_output(&job.input, &job.container, "");
+        job.output = cli::tagged_output(
+            &job.input,
+            &job.container,
+            cli::video::encoder_tag(&job.encoder),
+        );
+    } else {
+        job.output = cli::deconflict(&job.output);
     }
     if let Some(suffix) = subtitle_override {
         job.subtitle = resolve_batch_subtitle(&job.input, &suffix).unwrap_or_default();
@@ -808,6 +821,11 @@ pub fn make_emitter(app: AppHandle) -> Arc<Emitter> {
             maruko_core::logs::write(&format!("事件发送失败：{}", e));
         }
     }))
+}
+
+#[tauri::command]
+pub fn log_frontend(message: String) {
+    maruko_core::logs::write(&message);
 }
 
 #[tauri::command]

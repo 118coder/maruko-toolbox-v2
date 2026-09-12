@@ -3,13 +3,16 @@
 
 import { invoke, pickFile, convertFileSrc } from '../bridge.js';
 import { $, bindFileField, toast } from '../components.js';
-import { state } from '../state.js';
+import { state, encoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
 
 export function initAvs() {
   bindFileField($('#sVideo'), { kind: 'video', title: '选择视频' });
   bindFileField($('#sSub'), { kind: 'subtitle', title: '选择字幕' });
-  bindFileField($('#sOutput'), { kind: 'video', title: '选择输出文件', save: true });
+  bindFileField($('#sOutput'), { kind: 'video', title: '选择输出文件', save: true, onSet: () => { $('#sOutput').dataset.auto = ''; } });
+  // 输出自动命名：与视频页编码器一致（测试.mp4 → 测试x264.mp4）
+  $('#sVideo').addEventListener('change', autoFillOutput);
+  $('#vEncoder').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); });
   $('#sPickVideo').addEventListener('click', () => $('#sVideo').click());
   $('#sPickSub').addEventListener('click', () => $('#sSub').click());
   $('#sPickOutput').addEventListener('click', () => $('#sOutput').click());
@@ -77,6 +80,17 @@ export function initAvs() {
 }
 
 /** 脚本文本：手动脚本原样；否则返回由勾选滤镜生成的"滤镜部分"（不含 Source 行） */
+function isAutoOutput() {
+  return $('#sOutput').dataset.auto === '1';
+}
+
+function autoFillOutput() {
+  const v = $('#sVideo').value;
+  if (!v) return;
+  $('#sOutput').value = taggedName(v, encoderTag($('#vEncoder').value), 'mp4');
+  $('#sOutput').dataset.auto = '1';
+}
+
 function scriptText() {
   const manual = $('#sScript').value.trim();
   if (manual) return manual;
@@ -140,6 +154,9 @@ function buildJob() {
 export function handleDrop(paths) {
   if (paths[0]) {
     if (/\.(ass|ssa|srt)$/i.test(paths[0])) $('#sSub').value = paths[0];
-    else $('#sVideo').value = paths[0];
+    else {
+      $('#sVideo').value = paths[0];
+      $('#sVideo').dispatchEvent(new Event('change'));
+    }
   }
 }

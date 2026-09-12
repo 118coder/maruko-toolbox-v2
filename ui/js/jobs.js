@@ -5,6 +5,7 @@ import { fmtTime, toast } from './components.js';
 
 const jobs = new Map(); // id -> {id,title,state,output,progress}
 let visible = false;
+let stripHideTimer = null;
 
 function el(id) { return document.getElementById(id); }
 
@@ -54,8 +55,38 @@ function ensureVisible() {
 }
 
 export function hideProgress() {
+  // 只收起详情弹窗；内嵌进度条仍然常驻（点「详情」可随时展开）
   visible = false;
   el('progressOverlay').classList.remove('show');
+}
+
+/** 内嵌进度条（批量压制上方）：有任务排队/运行时显示 */
+function updateStrip() {
+  const strip = el('inlineProgress');
+  if (!strip) return;
+  const list = [...jobs.values()].sort((a, b) => a.id - b.id);
+  const active = list.find((j) => j.state === 'running') || list.find((j) => j.state === 'queued');
+  if (active) {
+    clearTimeout(stripHideTimer);
+    strip.classList.add('show');
+    el('ipTitle').textContent = active.title || '任务';
+    const pct = active.progress?.pct || (active.state === 'queued' ? 0 : 0);
+    el('ipBar').style.width = pct.toFixed(1) + '%';
+    el('ipPct').textContent = pct.toFixed(1) + '%';
+    return;
+  }
+  const done = list.length && list.every((j) => ['done', 'failed', 'cancelled'].includes(j.state));
+  if (done) {
+    strip.classList.add('show');
+    const failed = list.some((j) => j.state === 'failed');
+    el('ipTitle').textContent = failed ? '队列已结束（有失败项）' : '队列已全部完成';
+    el('ipBar').style.width = '100%';
+    el('ipPct').textContent = failed ? '✗' : '✓';
+    clearTimeout(stripHideTimer);
+    stripHideTimer = setTimeout(() => strip.classList.remove('show'), 4000);
+  } else {
+    strip.classList.remove('show');
+  }
 }
 
 export function initJobsUI() {
@@ -73,6 +104,7 @@ export function initJobsUI() {
     j.title = j.title || s.title;
     j.output = s.output;
     renderQueue();
+    updateStrip();
     if (s.state === 'running') {
       ensureVisible();
       if (currentId == null || j.state === 'running') selectJob(s.id);
@@ -93,6 +125,12 @@ export function initJobsUI() {
       el('pbarfill').style.width = p.pct.toFixed(1) + '%';
       el('ppct').textContent = p.pct.toFixed(1) + '%';
       renderStats(j);
+    }
+    // 内嵌进度条跟随运行中的任务
+    const running = [...jobs.values()].find((x) => x.state === 'running');
+    if (running && running.id === p.id) {
+      el('ipBar').style.width = p.pct.toFixed(1) + '%';
+      el('ipPct').textContent = p.pct.toFixed(1) + '%';
     }
   });
 
@@ -123,6 +161,19 @@ export function initJobsUI() {
     }
   });
   el('pcanceldismiss').addEventListener('click', hideProgress);
+  // 内嵌条：详情 = 重新打开弹窗；取消 = 取消运行中的任务（没有则取消最后排队的）
+  el('ipOpen').addEventListener('click', () => {
+    const running = [...jobs.values()].find((x) => x.state === 'running' || x.state === 'queued');
+    if (running) selectJob(running.id);
+    ensureVisible();
+  });
+  el('ipCancel').addEventListener('click', async () => {
+    const target = [...jobs.values()].find((x) => x.state === 'running') || [...jobs.values()].filter((x) => x.state === 'queued').pop();
+    if (target) {
+      await invoke('job_cancel', { id: target.id });
+      toast(`已请求取消：${target.title}`);
+    }
+  });
   el('shutdowncancel').addEventListener('click', async () => {
     await invoke('shutdown_cancel_cmd');
     el('shutdownbar').classList.remove('show');
