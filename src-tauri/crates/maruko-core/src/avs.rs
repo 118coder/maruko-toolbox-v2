@@ -2,7 +2,8 @@
 /// 顺序（见 docs/DECISIONS.md D6）：Source → Crop → LanczosResize → AddBorders
 /// → Tweak → Levels → Sharpen → Undot → Trim → TextSub
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct AvsFilters {
     /// (色度 hue, 饱和度 sat, 亮度 bright, 对比度 cont)
     pub tweak: Option<(f64, f64, f64, f64)>,

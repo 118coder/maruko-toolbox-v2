@@ -101,6 +101,7 @@ pub fn run() {
             commands::get_tools_info,
             commands::check_ffmpeg_features,
             commands::pick_file,
+            commands::pick_folder,
             commands::open_path,
             commands::mediainfo_analyze,
             commands::encode_video,

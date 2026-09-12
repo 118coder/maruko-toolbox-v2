@@ -1,4 +1,4 @@
-use crate::cli::{Parser, Plan};
+use crate::cli::{Parser, Plan, Step};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
@@ -88,6 +88,16 @@ struct Shared {
     running_pid: Mutex<Option<u32>>,
     /// 正在运行的任务 id；0 = 无
     running_id: AtomicU32,
+}
+
+trait EmitLog {
+    fn emitter_log(&self, id: u32, line: &str);
+}
+
+impl EmitLog for Arc<Shared> {
+    fn emitter_log(&self, id: u32, line: &str) {
+        (self.emitter)(Ev::Log(LogLine { id, line: line.to_string() }));
+    }
 }
 
 pub struct JobManager {
@@ -274,61 +284,73 @@ fn arm_shutdown(em: &Arc<Emitter>) {
 }
 
 fn run_plan(id: u32, plan: &Plan, sh: &Arc<Shared>, opts: &RunOpts) -> bool {
-    let mut prev_stdout: Option<std::process::ChildStdout> = None;
-    let total_steps = plan.steps.len();
-    for (idx, step) in plan.steps.iter().enumerate() {
-        if sh.cancel.load(Ordering::SeqCst) {
+    // 按 stdin_from_prev 把步骤切成若干"管道链"，链内并发启动（shell 语义），链间串行
+    let mut i = 0;
+    while i < plan.steps.len() {
+        let mut j = i + 1;
+        while j < plan.steps.len() && plan.steps[j].stdin_from_prev {
+            j += 1;
+        }
+        if !run_chain(id, &plan.steps[i..j], sh, opts) {
             return false;
         }
-        (sh.emitter)(Ev::Log(LogLine {
-            id,
-            line: format!("▶ [{}] 开始（{}/{}）", step.title, idx + 1, total_steps),
-        }));
+        i = j;
+    }
+    true
+}
+
+fn run_chain(id: u32, steps: &[Step], sh: &Arc<Shared>, opts: &RunOpts) -> bool {
+    use std::process::{Child, ChildStdout};
+    let n = steps.len();
+    if n == 1 {
+        return run_single(id, &steps[0], None, sh, opts);
+    }
+    sh.emitter_log(id, &format!("▶ 管道链：{} 步并发启动", n));
+
+    let dead: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let mut children: Vec<Child> = Vec::new();
+    let mut stderr_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut prev_stdout: Option<ChildStdout> = None;
+
+    for (k, step) in steps.iter().enumerate() {
         let mut cmd = Command::new(&step.exe);
         cmd.args(&step.args);
-        if step.stdin_from_prev {
-            match prev_stdout.take() {
-                Some(prev) => {
-                    cmd.stdin(Stdio::from(prev));
-                }
-                None => {
-                    (sh.emitter)(Ev::Log(LogLine { id, line: "✗ 内部错误：管道缺失".into() }));
-                    return false;
-                }
-            }
-        } else {
+        if k == 0 {
             cmd.stdin(Stdio::null());
+        } else {
+            let prev = prev_stdout.take().expect("链上 stdout 缺失");
+            cmd.stdin(Stdio::from(prev));
         }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         if !step.env_path.is_empty() {
             let old = std::env::var("PATH").unwrap_or_default();
-            let mut new_path = step.env_path.join(";");
-            new_path.push(';');
-            new_path.push_str(&old);
-            cmd.env("PATH", new_path);
+            let mut np = step.env_path.join(";");
+            np.push(';');
+            np.push_str(&old);
+            cmd.env("PATH", np);
         }
         cmd.creation_flags_cfg(CREATE_NO_WINDOW | priority_flags(&opts.priority));
-
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                (sh.emitter)(Ev::Log(LogLine { id, line: format!("✗ 启动失败：{}（{}）", e, step.exe) }));
+                sh.emitter_log(id, &format!("✗ 启动失败：{}（{}）", e, step.exe));
+                for c in &children {
+                    kill_tree(c.id());
+                }
                 return false;
             }
         };
-        *sh.running_pid.lock().unwrap() = Some(child.id());
-
-        let pid = child.id();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        let dead = sh.dead.clone();
-        let em1 = sh.emitter.clone();
+
+        let em = sh.emitter.clone();
         let parser = step.parser.clone();
         let t0 = Instant::now();
-        let h_err = std::thread::spawn(move || {
+        let dead_err = dead.clone();
+        stderr_handles.push(std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for chunk in ChunkIter::new(reader) {
-                if dead.load(Ordering::SeqCst) {
+                if dead_err.load(Ordering::SeqCst) {
                     return;
                 }
                 for line in chunk.lines() {
@@ -337,34 +359,50 @@ fn run_plan(id: u32, plan: &Plan, sh: &Arc<Shared>, opts: &RunOpts) -> bool {
                     }
                     if let Some(mut p) = parse_progress(&parser, &line, t0.elapsed().as_secs_f64()) {
                         p.id = id;
-                        em1(Ev::Progress(p));
+                        em(Ev::Progress(p));
                     }
-                    em1(Ev::Log(LogLine { id, line: line.to_string() }));
+                    em(Ev::Log(LogLine { id, line: line.to_string() }));
                 }
             }
-        });
-        let dead2 = sh.dead.clone();
-        let em2 = sh.emitter.clone();
-        let h_out = std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if dead2.load(Ordering::SeqCst) {
-                    return;
-                }
-                match line {
-                    Ok(l) if !l.trim().is_empty() => em2(Ev::Log(LogLine { id, line: l })),
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
-            }
-        });
+        }));
 
-        let status = loop {
+        if k + 1 < n {
+            // 中间步骤：stdout 留给下一步的 stdin
+            prev_stdout = Some(stdout);
+        } else {
+            // 最后一步：stdout 由日志线程排空
+            let dead_out = dead.clone();
+            let em2 = sh.emitter.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if dead_out.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    match line {
+                        Ok(l) if !l.trim().is_empty() => em2(Ev::Log(LogLine { id, line: l })),
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        children.push(child);
+    }
+
+    let pids: Vec<u32> = children.iter().map(|c| c.id()).collect();
+    *sh.running_pid.lock().unwrap() = Some(pids[0]);
+
+    let mut all_ok = true;
+    for (idx, child) in children.iter_mut().enumerate() {
+        let st = loop {
             match child.try_wait() {
                 Ok(Some(st)) => break Some(st),
                 Ok(None) => {
                     if sh.cancel.load(Ordering::SeqCst) {
-                        kill_tree(pid);
+                        for pid in &pids {
+                            kill_tree(*pid);
+                        }
                         let _ = child.wait();
                         break None;
                     }
@@ -373,27 +411,122 @@ fn run_plan(id: u32, plan: &Plan, sh: &Arc<Shared>, opts: &RunOpts) -> bool {
                 Err(_) => break None,
             }
         };
-        sh.dead.store(true, Ordering::SeqCst);
-        let _ = h_err.join();
-        let _ = h_out.join();
-        *sh.running_pid.lock().unwrap() = None;
-
-        match status {
-            Some(st) if st.success() => {
-                (sh.emitter)(Ev::Log(LogLine { id, line: format!("✓ [{}] 完成", step.title) }));
-            }
-            Some(_) => {
-                if sh.cancel.load(Ordering::SeqCst) {
-                    (sh.emitter)(Ev::Log(LogLine { id, line: "已取消".into() }));
-                } else {
-                    (sh.emitter)(Ev::Log(LogLine { id, line: format!("✗ [{}] 失败（退出码非 0），查看上方日志定位原因", step.title) }));
+        match st {
+            Some(s) if s.success() => {}
+            _ => {
+                if !sh.cancel.load(Ordering::SeqCst) {
+                    sh.emitter_log(id, &format!("✗ [{}] 失败（退出码非 0）", steps[idx].title));
                 }
-                return false;
+                all_ok = false;
+                break;
             }
-            None => return false,
         }
     }
-    true
+
+    dead.store(true, Ordering::SeqCst);
+    for h in stderr_handles {
+        let _ = h.join();
+    }
+    *sh.running_pid.lock().unwrap() = None;
+    all_ok
+}
+
+fn run_single(id: u32, step: &Step, stdin: Option<std::process::ChildStdout>, sh: &Arc<Shared>, opts: &RunOpts) -> bool {
+    let mut cmd = Command::new(&step.exe);
+    cmd.args(&step.args);
+    if let Some(prev) = stdin {
+        cmd.stdin(Stdio::from(prev));
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if !step.env_path.is_empty() {
+        let old = std::env::var("PATH").unwrap_or_default();
+        let mut np = step.env_path.join(";");
+        np.push(';');
+        np.push_str(&old);
+        cmd.env("PATH", np);
+    }
+    cmd.creation_flags_cfg(CREATE_NO_WINDOW | priority_flags(&opts.priority));
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            (sh.emitter)(Ev::Log(LogLine { id, line: format!("✗ 启动失败：{}（{}）", e, step.exe) }));
+            return false;
+        }
+    };
+    *sh.running_pid.lock().unwrap() = Some(child.id());
+    let pid = child.id();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let dead = Arc::new(AtomicBool::new(false));
+    let dead_err = dead.clone();
+    let em1 = sh.emitter.clone();
+    let parser = step.parser.clone();
+    let t0 = Instant::now();
+    let h_err = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for chunk in ChunkIter::new(reader) {
+            if dead_err.load(Ordering::SeqCst) {
+                return;
+            }
+            for line in chunk.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Some(mut p) = parse_progress(&parser, &line, t0.elapsed().as_secs_f64()) {
+                    p.id = id;
+                    em1(Ev::Progress(p));
+                }
+                em1(Ev::Log(LogLine { id, line: line.to_string() }));
+            }
+        }
+    });
+    let dead2 = dead.clone();
+    let em2 = sh.emitter.clone();
+    let h_out = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if dead2.load(Ordering::SeqCst) {
+                return;
+            }
+            match line {
+                Ok(l) if !l.trim().is_empty() => em2(Ev::Log(LogLine { id, line: l })),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) => {
+                if sh.cancel.load(Ordering::SeqCst) {
+                    kill_tree(pid);
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            Err(_) => break None,
+        }
+    };
+    dead.store(true, Ordering::SeqCst);
+    let _ = h_err.join();
+    let _ = h_out.join();
+    *sh.running_pid.lock().unwrap() = None;
+    match status {
+        Some(st) if st.success() => {
+            (sh.emitter)(Ev::Log(LogLine { id, line: format!("✓ [{}] 完成", step.title) }));
+            true
+        }
+        _ => {
+            if !sh.cancel.load(Ordering::SeqCst) {
+                (sh.emitter)(Ev::Log(LogLine { id, line: format!("✗ [{}] 失败（退出码非 0），查看上方日志定位原因", step.title) }));
+            }
+            false
+        }
+    }
 }
 
 /// 把 stderr 流按 \r / \n 分片（编码器用 \r 原地刷新进度）。

@@ -23,6 +23,7 @@ pub struct VideoJob {
     pub subtitle: String,
     pub container: String,     // mp4 | mkv
     pub avs_script: String,    // 非空 = 原样使用（AVS 页）
+    pub avs_filters: Option<crate::avs::AvsFilters>, // AVS 页结构化滤镜
     pub shutdown_after: bool,
 }
 
@@ -47,6 +48,7 @@ impl Default for VideoJob {
             subtitle: String::new(),
             container: "mp4".into(),
             avs_script: String::new(),
+            avs_filters: None,
             shutdown_after: false,
         }
     }

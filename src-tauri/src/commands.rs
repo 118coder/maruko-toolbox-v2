@@ -161,6 +161,19 @@ pub async fn pick_file(app: AppHandle, title: String, filters: Vec<DialogFilter>
 }
 
 #[tauri::command]
+pub async fn pick_folder(app: AppHandle, title: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    app.dialog()
+        .file()
+        .set_title(&title)
+        .pick_folder(move |p| {
+            let _ = tx.send(p.map(|v| v.simplified().to_string()));
+        });
+    rx.recv().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn open_path(path: String, reveal: Option<bool>) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
@@ -299,14 +312,14 @@ fn prepare_video_job(
                 "ffms2" => maruko_core::avs::Demuxer::Ffms2,
                 _ => maruko_core::avs::Demuxer::Lsmash,
             };
-            let filters = maruko_core::avs::AvsFilters {
+            let filters = job.avs_filters.clone().unwrap_or(maruko_core::avs::AvsFilters {
                 resize: if !job.keep_res && job.width > 0 && job.height > 0 {
                     Some((job.width, job.height))
                 } else {
                     None
                 },
                 ..Default::default()
-            };
+            });
             maruko_core::avs::build_script(
                 &job.input,
                 opt_str(&job.subtitle),
@@ -781,8 +794,14 @@ pub fn make_emitter(app: AppHandle) -> Arc<Emitter> {
     Arc::new(Box::new(move |ev: Ev| {
         let r = match ev {
             Ev::Progress(p) => app.emit("job://progress", p),
-            Ev::State(s) => app.emit("job://state", s),
-            Ev::Log(l) => app.emit("job://log", l),
+            Ev::State(s) => {
+                maruko_core::logs::write(&format!("[任务 #{}] {} ({})", s.id, s.state, s.title));
+                app.emit("job://state", s)
+            }
+            Ev::Log(l) => {
+                maruko_core::logs::write(&format!("[任务 #{}] {}", l.id, l.line));
+                app.emit("job://log", l)
+            }
             Ev::QueueIdle { last_failed } => app.emit("job://queue_idle", serde_json::json!({ "lastFailed": last_failed })),
         };
         if let Err(e) = r {

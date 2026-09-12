@@ -34,9 +34,10 @@ pub fn output_ext(encoder: &str) -> &'static str {
     }
 }
 
-/// 音频压制计划：ffmpeg 解码 wav 管道 → 编码器（与原版管线一致）。
-/// `temp_base` 用于输出文件自动命名（output 为空时）。
-pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, _temp_base: &str) -> Result<Vec<Step>, String> {
+/// 音频压制计划：ffmpeg 解码到临时 wav → 编码器从文件读取。
+/// 不用 stdin 管道：ffmpeg 7.x 的 WAV muxer 写管道收尾时报 EINVAL（数据已写完但退出码非 0），
+/// 老编码器的 stdin 兼容性也参差——文件中转最稳（见 DEVLOG）。
+pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, temp_base: &str) -> Result<Vec<Step>, String> {
     if job.input.is_empty() {
         return Err("未选择输入音频".into());
     }
@@ -73,21 +74,23 @@ pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, _temp_base: &s
     };
     let tool_path = std::path::Path::new(tools_dir).join(tool).to_string_lossy().to_string();
 
-    // 第 1 步：解码为 wav 管道
+    // 第 1 步：解码为临时 wav 文件
+    let wav_tmp = format!("{}.wav", temp_base);
     let mut dec = Step::new("音频解码 (ffmpeg)", ffmpeg, vec![
         "-hide_banner".into(), "-y".into(), "-i".into(), job.input.clone(),
-        "-vn".into(), "-f".into(), "wav".into(), "pipe:1".into(),
+        "-vn".into(), "-f".into(), "wav".into(), wav_tmp.clone(),
     ]);
     dec.parser = Parser::Ffmpeg { duration: 0.0 };
+    dec.temp_outputs.push(wav_tmp.clone());
     steps.push(dec);
 
-    // 第 2 步：编码器（stdin = 上一步 stdout）
+    // 第 2 步：编码器读临时 wav
     let custom = job.mode == "custom" && !job.custom.trim().is_empty();
     let mut args: Vec<String> = Vec::new();
     let mut env_path = vec![tools_dir.to_string()];
     match job.encoder.as_str() {
         "neroaac" => {
-            args.extend(["-if".into(), "-".into(), "-of".into(), output.clone()]);
+            // neroAacEnc 要求 [options] 在 -if/-of 之前
             if custom {
                 args.extend(split_args(&job.custom));
             } else {
@@ -95,47 +98,47 @@ pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, _temp_base: &s
                 args.push(if job.bitrate <= 64 { "-he".into() } else { "-lc".into() });
                 args.extend(["-br".into(), format!("{}", job.bitrate * 1000)]);
             }
+            args.extend(["-if".into(), wav_tmp.clone(), "-of".into(), output.clone()]);
         }
         "qaac" => {
             // qaac 依赖 qtfiles 里的 Apple DLL
             env_path.push(std::path::Path::new(tools_dir).join("qtfiles").to_string_lossy().to_string());
             args.push("--ignorelength".into());
-            args.extend(["-o".into(), output.clone(), "-".into()]);
             if custom {
-                args.splice(1..1, split_args(&job.custom));
+                args.extend(split_args(&job.custom));
             } else {
-                args.splice(1..1, vec!["-c".into(), job.bitrate.to_string()]);
+                args.extend(["-c".into(), job.bitrate.to_string()]);
             }
+            args.extend([wav_tmp.clone(), "-o".into(), output.clone()]);
         }
         "fdkaac" => {
-            args.extend(["-o".into(), output.clone(), "-".into()]);
-            if custom {
-                args.splice(0..0, split_args(&job.custom));
-            } else {
-                args.splice(0..0, vec!["-b".into(), job.bitrate.to_string()]);
-            }
-        }
-        "lame" => {
-            args.extend(["--silent".into()]);
             if custom {
                 args.extend(split_args(&job.custom));
             } else {
                 args.extend(["-b".into(), job.bitrate.to_string()]);
             }
-            args.extend(["-".into(), output.clone()]);
+            args.extend(["-o".into(), output.clone(), wav_tmp.clone()]);
+        }
+        "lame" => {
+            args.push("--silent".into());
+            if custom {
+                args.extend(split_args(&job.custom));
+            } else {
+                args.extend(["-b".into(), job.bitrate.to_string()]);
+            }
+            args.extend([wav_tmp.clone(), output.clone()]);
         }
         "flac" => {
-            args.extend(["-s".into()]);
+            args.push("-s".into());
             if custom {
                 args.extend(split_args(&job.custom));
             }
-            args.extend(["-o".into(), output.clone(), "-".into()]);
+            args.extend(["-f".into(), wav_tmp.clone(), "-o".into(), output.clone()]);
         }
         _ => unreachable!(),
     }
     let title = format!("音频编码 {}", tool.trim_end_matches(".exe"));
     let mut enc = Step::new(&title, &tool_path, args);
-    enc.stdin_from_prev = true;
     enc.env_path = env_path;
     steps.push(enc);
     Ok(steps)
@@ -186,12 +189,15 @@ pub fn build_merge_steps(
         s.parser = Parser::Ffmpeg { duration: 0.0 };
         return Ok(vec![s]);
     }
-    // NeroAAC / qaac / fdkaac 走 wav 管道
-    args.extend(["-f".into(), "wav".into(), "pipe:1".into()]);
-    let mut dec = Step::new("音频解码 (ffmpeg)", ffmpeg, args);
+    // NeroAAC / qaac / fdkaac：先合并到临时 wav 文件，再从文件编码
+    let wav_tmp = format!("{}_merged.wav", output.trim_end_matches(output_ext(encoder)));
+    let mut dec = Step::new("音频合并 (ffmpeg)", ffmpeg, args);
+    dec.args.push(wav_tmp.clone());
     dec.parser = Parser::Ffmpeg { duration: 0.0 };
+    dec.temp_outputs.push(wav_tmp.clone());
+
     let sub_job = AudioJob {
-        input: "(merge)".into(),
+        input: wav_tmp.clone(),
         output: output.to_string(),
         encoder: encoder.to_string(),
         mode: "bitrate".into(),
@@ -199,11 +205,10 @@ pub fn build_merge_steps(
         custom: String::new(),
     };
     let mut steps = vec![dec];
+    // 从 wav 文件走编码（build_steps 会先解码——但输入已是 wav，
+    // 为避免重复解码，这里直接取它的编码步）
     let mut enc_steps = build_steps(&sub_job, tools_dir, ffmpeg, "")?;
-    // 丢弃解码步（input 是占位符），只留编码步
     if let Some(enc) = enc_steps.pop() {
-        let mut enc = enc;
-        enc.stdin_from_prev = true;
         steps.push(enc);
     }
     Ok(steps)
@@ -216,34 +221,40 @@ mod tests {
     #[test]
     fn test_neroaac_steps() {
         let j = AudioJob { input: "a.wav".into(), output: "o.m4a".into(), bitrate: 128, ..Default::default() };
-        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "").unwrap();
+        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
         assert_eq!(st.len(), 2);
-        assert!(st[0].args.contains(&"pipe:1".to_string()));
-        assert!(st[1].stdin_from_prev);
+        // 解码到临时 wav
+        assert!(st[0].args.contains(&"C:\\tmp\\j1.wav".to_string()));
+        assert!(st[0].args.contains(&"-f".to_string()) && st[0].args.contains(&"wav".to_string()));
+        // 编码器从临时 wav 读，参数在前
         let joined = st[1].args.join(" ");
-        assert!(joined.contains("-lc -br 128000"));
-        assert!(joined.contains("-if - -of o.m4a"));
+        assert!(joined.contains("-lc -br 128000 -if C:\\tmp\\j1.wav -of o.m4a"));
+        assert!(!st[1].stdin_from_prev);
+        // 临时 wav 会被清理
+        assert!(st[0].temp_outputs.contains(&"C:\\tmp\\j1.wav".to_string()));
     }
 
     #[test]
     fn test_neroaac_he() {
         let j = AudioJob { input: "a.wav".into(), output: "o.m4a".into(), bitrate: 48, ..Default::default() };
-        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "").unwrap();
+        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
         assert!(st[1].args.contains(&"-he".to_string()));
     }
 
     #[test]
     fn test_qaac_env() {
         let j = AudioJob { input: "a.wav".into(), output: "o.m4a".into(), encoder: "qaac".into(), bitrate: 256, ..Default::default() };
-        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "").unwrap();
+        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
         assert!(st[1].env_path.iter().any(|p| p.ends_with("qtfiles")));
-        assert!(st[1].args.contains(&"-c".to_string()) && st[1].args.contains(&"256".to_string()));
+        let joined = st[1].args.join(" ");
+        assert!(joined.contains("-c 256"));
+        assert!(joined.contains("C:\\tmp\\j1.wav -o o.m4a"));
     }
 
     #[test]
     fn test_custom_mode() {
         let j = AudioJob { input: "a.wav".into(), output: "o.m4a".into(), encoder: "fdkaac".into(), mode: "custom".into(), custom: "-m 3".into(), ..Default::default() };
-        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "").unwrap();
+        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
         assert!(st[1].args.contains(&"-m".to_string()));
     }
 
@@ -252,5 +263,15 @@ mod tests {
         assert_eq!(output_ext("lame"), "mp3");
         assert_eq!(output_ext("flac"), "flac");
         assert_eq!(output_ext("neroaac"), "m4a");
+    }
+
+    #[test]
+    fn test_merge_steps() {
+        let inputs = vec!["a.m4a".to_string(), "b.m4a".to_string()];
+        let st = build_merge_steps(&inputs, "o.m4a", "neroaac", 128, "T:\\", "T:\\ffmpeg.exe").unwrap();
+        // 合并到临时 wav + nero 从文件编码
+        assert!(st[0].args.contains(&"-filter_complex".to_string()));
+        let joined = st[1].args.join(" ");
+        assert!(joined.contains("-br 128000"));
     }
 }
