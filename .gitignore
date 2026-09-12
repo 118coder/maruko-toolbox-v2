@@ -1,7 +1,5 @@
 node_modules/
 src-tauri/target/
 tools_test/
+dist/
 *.log
-dist/logs/
-dist/temp/
-dist/config.json
