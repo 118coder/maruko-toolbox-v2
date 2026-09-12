@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口能力：事件与对话框",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}
