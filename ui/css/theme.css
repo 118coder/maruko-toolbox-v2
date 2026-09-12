@@ -63,21 +63,12 @@ html, body {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  padding: 6px 8px 0;
+  padding: 6px 8px 0 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   user-select: none;
   flex: none;
 }
-.tabbar .brand {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px 0 2px;
-  font-weight: 600;
-  font-size: 13px;
-}
-.tabbar .brand img { width: 20px; height: 20px; }
 .tab {
   appearance: none;
   border: none;

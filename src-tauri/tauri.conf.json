@@ -12,6 +12,7 @@
       {
         "label": "splash",
         "url": "splash.html",
+        "backgroundColor": "#E9488A",
         "width": 432,
         "height": 300,
         "center": true,
