@@ -3,3 +3,4 @@ src-tauri/target/
 tools_test/
 dist/
 *.log
+voukoder-master.zip
