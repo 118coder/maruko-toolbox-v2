@@ -95,3 +95,10 @@
 **下载渠道备忘**（GitHub 直连可通但 git push 被重置；bitbucket/mkvtoolnix.download/mediaarea 直连正常）：jpsdr 构建发布于 GitHub Releases；MKVToolNix 官方 7z 命名 `mkvtoolnix-64-bit-<ver>.7z`；Windows 自带 `C:\Windows\System32\tar.exe`（bsdtar）可解 7z，Git Bash 的 GNU tar 不行。
 
 **E2E 验证矩阵**（tools-modern 实测）：avs4x26x+新x265 8bit（真实 AVS 管线，ColorBars 48帧）✅ yuv420p；10bit y4m `-D 10` ✅ yuv420p10le；raw 10bit（avs4x26x HBD 形态）✅；x265 2pass ✅；x264 10bit `--output-depth 10` ✅ yuv420p10le；mkvmerge v101 封装 ✅ 帧率保持 24000/1001；MP4Box(2016)+新流 ✅；MediaInfo 25.09 C API（ctypes 模拟 mediainfo.rs 调用序列）✅ 正确识别 HEVC Main 10；单元测试 63 个全过（含新增 test_soft_plan_depth_args）。
+
+### V1.0 发布版（2026-09-14）
+- 帮助页【关于】顶部加入 GitHub 开源地址 https://github.com/118coder/maruko-toolbox-v2；新增后端 `open_url` 命令（rundll32 FileProtocolHandler，仅 http/https，防止 Tauri 内导航被拦截）
+- 软件版本号定为「小丸工具箱V2现代版1.0」：tauri.conf.json version=1.0.0、窗口标题、启动画面、关于页、commands::VERSION（检查更新用）、pack_full.py（exe 名/zip 名/使用说明）全部同步
+- 仓库策略（用户拍板）：**仓库仅源码**；历史中 165MB zip 已 filter-branch 清除（曾致 push 被拒 GH001），.gitignore 加 `*.zip`；完整包作为 **GitHub Release 发行包**上传（tag v1.0）
+- 发布链路：`git push --force-with-lease`（历史改写后必须 force）→ API 创建 Release → 上传 asset。代理实际端口 **7897**（环境变量里的 7890 是错的，用户机器监听 7897）；git 凭据可用 `git credential fill` 提取（GCM 的 PAT，可调 GitHub API）
+- Release：https://github.com/118coder/maruko-toolbox-v2/releases/tag/v1.0
