@@ -4,3 +4,4 @@ tools_test/
 dist/
 *.log
 voukoder-master.zip
+*.zip

@@ -26,6 +26,7 @@
 | D21 | Voukoder 集成采用"能力搬运"而非嵌入本体：Voukoder 为面向 NLE 的渲染管线插件（已 EOL、GPL v2），嵌入在架构与授权上都不合适；改为用 ffmpeg 后端实现其编码器阵容（ProRes/CineForm/FFV1/UtVideo/VP9/AC3/E-AC3/Opus），参数面板为自研实现，不复制其 GPL 代码 | 架构匹配 + 授权隔离 |
 | D22 | 专业编码器选择后自动切换输出容器（ProRes/CineForm→mov，FFV1/UtVideo→mkv，VP9→webm）并禁用不适用码控（无损/固定质量类） | 容器与编码器存在硬约束，自动切换避免用户踩坑 |
 | D23 | 发布采用"完整包"：exe 旁自带 tools\（复用原版工具链全套，其中 ffmpeg.exe/ffprobe.exe 顶替为现代 7.1 构建以支持 GPU/现代编码器/新参数），定位器优先检测 exe 旁 tools\（便携模式），零依赖解压即用 | 用户明确要求无原版小丸环境可完整使用 |
+| D24 | 工具链现代化（v2.4）：x265→4.3 multilib、x264→r3214 t_mod（均为单 exe 多位深库，代码按文件名注入 `-D`/`--output-depth` 位深参数）、MKVToolNix→v101（`--default-duration` 加 fps 单位）、MediaInfo.dll→25.09（根级与 x64\ 两处）、ffmpeg 保持 7.1；AviSynth/avs4x26x/MP4Box/neroAacEnc 保留旧版（生态依赖/无性能影响/渠道不可达/上游停更）；新工具链维护于 E:\maruko-build	ools-modern，打包脚本从它复制，原版安装目录不动 | 软编路线同质量提速约 20-50%（x265 2.5→4.3 的 AVX2/asm 增强与压缩率改进）、新格式封装兼容性、新版 MediaInfo 探测；文件名保持不变使代码与用户配置零迁移 |
 | D20 | 窗口尺寸 640×640（原版 624×583），最小 580×540，可缩放；控件布局按截图 1:1 复刻但用现代间距令牌 | 现代化要求 + 高分屏可读性 |
 
 ## 与原版交互细节的忠实度说明

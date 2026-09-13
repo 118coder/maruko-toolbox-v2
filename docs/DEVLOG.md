@@ -65,3 +65,33 @@
 - NVENC 参数面板（预设 p1-p7 / Multipass / 空间AQ / 前瞻），白名单透传
 - 音频 AC3/E-AC3/Opus；封装转换加 mov/webm/mpegts
 - E2E 实测：ProRes mov（apcn）✅、现代 x265 通用 10bit（yuv420p10le）✅
+
+## 2026-09-14
+
+### 工具链现代化（v2.4）：2016 版 → 2025/2026 版
+
+背景：完整包里的 tools\ 除 ffmpeg 外全部是原版小丸 2016-10-23 的产物。用户提出更新工具链以提升渲染性能。
+
+**替换清单**（新 tools-modern 目录 = 原版 tools 副本 + 逐项替换，原版安装目录不动）：
+
+| 组件 | 旧 | 新 | 来源 |
+| --- | --- | --- | --- |
+| x265 64 位三件（8/10/12bit 文件名） | x265 2.5 | **4.3**（multilib 单 exe 三份同内容，从 y4m/raw 位深参数选库） | jpsdr/x265 r4.3.0.13 (GCC 13.1 winthread) |
+| x265-8bit[gcc].exe（32 位名） | x265 2.5 x86 | 4.3 x86 8bit（官方 4.3 仍有 32 位 build） | 同上 |
+| x264 四件（32/64 × 8/10bit 文件名） | ~r2700 | **r3214 t_mod**（(8 & 10)-bit 双库单 exe） | jpsdr/x264 r3214 (winthread) |
+| mkvmerge / mkvextract / mkvinfo | MKVToolNix 9.x | **v101.0**（CLI 静态链接，独立运行已验证） | mkvtoolnix.download 官方 |
+| MediaInfo.dll（根级 + x64\ 两处） | 0.7.x (2016) | **25.09** | mediaarea.net（用户系统 System32 已有同版 DLL，直接拷贝） |
+| ffmpeg.exe / ffprobe.exe | （打包时顶替） | 7.1（pack_full.py 逻辑不变） | C:\Program Files\FFmpeg |
+| MP4Box.exe / mmg.exe | 0.6.x (2016) | **保留旧版**（见下） | - |
+
+**不更新项与理由**：AviSynth.dll + avs\ 滤镜群（32 位 2.6 生态，换 AviSynth+ 需全系 64 位滤镜，多数不存在；喂帧不是编码瓶颈）；avs4x26x（纯管道转发，无性能影响）；neroAacEnc（Nero 上游 2012 年停更，无新版）；qaac/fdkaac/lame/flac（收益极小，本轮未动）。
+
+**MP4Box 未换的原因**：GPAC Windows 构建的全部官方渠道（download.gpac.io、download.tsi.telecom-paristech.fr、files.gpac.io、GitHub releases 无资产）在本机网络环境均不可达，videohelp/free-codecs 转载站无直链。实测 2016 版 MP4Box 封装新 x265 4.3 流正常。后续如需更换：开代理后从 https://download.gpac.io/gpac/release/ 取新版替换 tools\MP4Box.exe 即可（程序按文件名调用，无需改代码）。
+
+**代码适配**（新旧版本差异，video.rs）：
+1. 位深注入：新版编码器是"单 exe 多位深库"，位深不再由 exe 变体决定 → encode_args() 按 encoder 文件名注入 `-D 10/12`（x265 multilib）或 `--output-depth 10`（x264 t_mod）；放在 extra 之前，用户自定义参数可覆盖。avs4x26x 对 HBD AVS 自动传 `--input-depth 10`，与 `-D 10` 协同（raw 形态实测 yuv420p10le）
+2. mkvmerge `--default-duration 0:24000/1001` 被 v101 拒绝（要求时间单位后缀）→ 改为 `0:24000/1001fps`（分数+fps，精确帧率）
+
+**下载渠道备忘**（GitHub 直连可通但 git push 被重置；bitbucket/mkvtoolnix.download/mediaarea 直连正常）：jpsdr 构建发布于 GitHub Releases；MKVToolNix 官方 7z 命名 `mkvtoolnix-64-bit-<ver>.7z`；Windows 自带 `C:\Windows\System32\tar.exe`（bsdtar）可解 7z，Git Bash 的 GNU tar 不行。
+
+**E2E 验证矩阵**（tools-modern 实测）：avs4x26x+新x265 8bit（真实 AVS 管线，ColorBars 48帧）✅ yuv420p；10bit y4m `-D 10` ✅ yuv420p10le；raw 10bit（avs4x26x HBD 形态）✅；x265 2pass ✅；x264 10bit `--output-depth 10` ✅ yuv420p10le；mkvmerge v101 封装 ✅ 帧率保持 24000/1001；MP4Box(2016)+新流 ✅；MediaInfo 25.09 C API（ctypes 模拟 mediainfo.rs 调用序列）✅ 正确识别 HEVC Main 10；单元测试 63 个全过（含新增 test_soft_plan_depth_args）。

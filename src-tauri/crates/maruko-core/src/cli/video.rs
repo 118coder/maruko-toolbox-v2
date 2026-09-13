@@ -125,6 +125,17 @@ pub fn encode_args(job: &VideoJob, ctx: &VideoCtx, pass: Option<u32>, x264: bool
         }
         a.push(ctx.threads.to_string());
     }
+    // 新工具链是单 exe 多位深库（x265 4.x multilib / x264 t_mod (8&10)-bit），
+    // 位深不再由 exe 变体决定，需显式选择；放在 extra 之前，用户自定义参数可覆盖
+    if job.encoder.contains("10bit") {
+        if x264 {
+            a.extend(["--output-depth".into(), "10".into()]);
+        } else {
+            a.extend(["-D".into(), "10".into()]);
+        }
+    } else if !x264 && job.encoder.contains("12bit") {
+        a.extend(["-D".into(), "12".into()]);
+    }
     if !ctx.extra.trim().is_empty() {
         a.extend(split_args(&ctx.extra));
     }
@@ -338,8 +349,9 @@ pub fn build_soft_plan(job: &VideoJob, ctx: &VideoCtx) -> Result<Plan, String> {
     if job.container == "mkv" {
         let mut args: Vec<String> = vec!["-o".into(), output.clone()];
         if !ctx.src_fps.is_empty() {
+            // mkvmerge 新版（v70+）要求 --default-duration 带单位，"24000/1001fps" 分数+fps 兼容精确帧率
             args.push("--default-duration".into());
-            args.push(format!("0:{}", ctx.src_fps));
+            args.push(format!("0:{}fps", ctx.src_fps));
         }
         args.push(raw.clone());
         if let Some(at) = &ctx.audio_temp {
@@ -581,6 +593,37 @@ mod tests {
     }
 
     #[test]
+    fn test_soft_plan_depth_args() {
+        // 新工具链单 exe 多位深库：10bit/12bit 需显式注入位深参数
+        let mut j = job();
+        j.encoder = "x265_64-10bit[gcc].exe".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        assert!(p.steps[1].args.join(" ").contains("-D 10"));
+
+        j.encoder = "x265_64-12bit[gcc].exe".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        assert!(p.steps[1].args.join(" ").contains("-D 12"));
+
+        j.encoder = "x264_64-10bit.exe".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        assert!(p.steps[1].args.join(" ").contains("--output-depth 10"));
+
+        // 8bit 走默认，不注入
+        j.encoder = "x265_64-8bit[gcc].exe".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        assert!(!p.steps[1].args.join(" ").contains("-D"));
+
+        // extra 自定义参数在位深参数之后，可覆盖（重复参数取后者）
+        let mut c = ctx();
+        c.extra = "-D 8".into();
+        j.encoder = "x265_64-10bit[gcc].exe".into();
+        let p = build_soft_plan(&j, &c).unwrap();
+        let joined = p.steps[1].args.join(" ");
+        assert!(joined.contains("-D 10"));
+        assert!(joined.rfind("-D 8").unwrap() > joined.rfind("-D 10").unwrap());
+    }
+
+    #[test]
     fn test_soft_plan_threads() {
         let mut j = job();
         let mut c = ctx();
@@ -600,7 +643,7 @@ mod tests {
         let mux = p.steps.last().unwrap();
         assert!(mux.exe.ends_with("mkvmerge.exe"));
         assert!(mux.args.contains(&"--default-duration".to_string()));
-        assert!(mux.args.contains(&"0:24000/1001".to_string()));
+        assert!(mux.args.contains(&"0:24000/1001fps".to_string()));
     }
 
     #[test]
