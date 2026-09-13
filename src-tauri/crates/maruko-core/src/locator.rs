@@ -57,8 +57,18 @@ pub const SOFT_ENCODERS: &[&str] = &[
 
 const REG_UNINSTALL: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{7EEB2DD0-264B-4340-B6BE-F05D99066D3C}";
 
-/// 按设置 → 注册表 → 常见路径 的顺序定位原版 tools 目录。
+/// 按设置 → exe旁tools → 注册表 → 常见路径 的顺序定位原版 tools 目录。
 pub fn find_tools_dir(settings_dir: &str) -> Option<PathBuf> {
+    // 便携模式：打包发布时 tools\ 直接放在 exe 旁边
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        let p = dir.join("tools");
+        if p.join("x265_64-8bit[gcc].exe").is_file() || p.join("mkvmerge.exe").is_file() {
+            return Some(p);
+        }
+    }
     if !settings_dir.trim().is_empty() {
         let p = PathBuf::from(settings_dir.trim());
         if p.join("x265_64-8bit[gcc].exe").is_file() || p.join("mkvmerge.exe").is_file() {
@@ -142,7 +152,11 @@ pub fn resolve(settings: &crate::settings::Settings) -> Tools {
     let ffprobe = find_ffprobe(tools_dir.as_deref());
     let mediainfo_x64 = tools_dir
         .as_ref()
-        .map(|t| t.join("x64").join("MediaInfo.dll"))
+        .map(|t| {
+            let x64 = t.join("x64").join("MediaInfo.dll");
+            let root = t.join("MediaInfo.dll");
+            if x64.is_file() { x64 } else { root }
+        })
         .filter(|p| p.is_file());
     let vsfilter = tools_dir
         .as_ref()
