@@ -55,13 +55,13 @@ export function encoderTag(id) {
   if (id.includes('nvenc')) return 'nvenc';
   if (id.includes('qsv')) return 'qsv';
   if (id.includes('amf')) return 'amf';
-  const pro = { prores_ks: 'prores', cfhd: 'cineform', ffv1: 'ffv1', utvideo: 'utvideo', 'libvpx-vp9': 'vp9' };
+  const pro = { prores_ks: 'prores', cfhd: 'cineform', ffv1: 'ffv1', utvideo: 'utvideo', 'libvpx-vp9': 'vp9', libx265: 'x265m', libx264: 'x264m' };
   return pro[id] || '';
 }
 
 /** 是否 Voukoder 风格专业编码器（ffmpeg 后端） */
 export function isProEncoder(id) {
-  return ['prores_ks', 'cfhd', 'ffv1', 'utvideo', 'libvpx-vp9'].includes(id);
+  return ['prores_ks', 'cfhd', 'ffv1', 'utvideo', 'libvpx-vp9', 'libx265', 'libx264'].includes(id);
 }
 
 /** 音频编码器命名标签（与后端对齐）：测试.wav + NeroAAC → 测试nero.m4a */

@@ -83,6 +83,8 @@
 | 封装转换新增 mov / webm / mpegts | ✅ | |
 | 参数面板联动 | ✅ | 选专业编码器自动切容器、禁用不适用码控 |
 
+| 现代版 x265 / x264（ffmpeg libx265/libx264） | ✅ | 内置 iAvoe 调参预设（通用 8/10bit、动漫 10bit、电影级高压缩、快速），x265 4.1 引擎，10bit 可选，MP4 faststart |
+
 ## 已知限制（如实记录）
 1. GPU 编码器不经过 AVS 管线，AVS 页滤镜仅部分等效支持（D18）。
 2. MediaInfo 输出格式与原版 MediaInfo GUI 文本视图一致；ffprobe 回退时格式略有差异。

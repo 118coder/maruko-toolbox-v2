@@ -53,3 +53,15 @@
 - 定位：index.html 加载 OK、Tauri IPC 注入 OK、main.js 模块从未执行 → 窗口级 error 监听捕获 `SyntaxError: Identifier 'out' has already been declared @ video.js:111`
 - 根因：行级补丁把批量提交块改坏（重复 const out + 丢失 return buildJob）
 - 修复 + 回归缝隙：所有 ui/js 文件纳入 node --check 语法检查；埋点全部清理
+
+### Voukoder 技术移植（V2.1）
+用户反馈 Voukoder 导出"更小更快"，解剖其源码（EOL，GPL v2）找到三个技术来源：
+1. FFmpeg libavcodec 内置的**新版 x265**（4.1 vs 原版工具链的 2.1/2016）
+2. **iAvoe 社区调参预设**（preset slow + aq-mode 4 + aq-motion + bframes 11 + rdoq 2 + psy-rd 等）
+3. **10bit 编码**（yuv420p10le，压缩效率更高）+ MP4 faststart
+
+实施（不复制 GPL 代码，预设参数值为 x265 公开 CLI 事实并注明来源）：
+- 新编码器条目"现代版 x265 / x264"（ffmpeg libx265/libx264 后端），五套 iAvoe 预设下拉（通用 8/10bit、动漫 10bit、电影级高压缩 8/10bit、快速），切换预设自动填 CRF
+- NVENC 参数面板（预设 p1-p7 / Multipass / 空间AQ / 前瞻），白名单透传
+- 音频 AC3/E-AC3/Opus；封装转换加 mov/webm/mpegts
+- E2E 实测：ProRes mov（apcn）✅、现代 x265 通用 10bit（yuv420p10le）✅

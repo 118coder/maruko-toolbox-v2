@@ -108,6 +108,8 @@ pub fn get_tools_info(state: State<AppState>) -> Tools {
         if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
             let txt = String::from_utf8_lossy(&o.stdout);
             let curated: &[(&str, &str)] = &[
+                ("libx265", "现代版 x265（Voukoder 风格预设）"),
+                ("libx264", "现代版 x264（Voukoder 风格预设）"),
                 ("prores_ks", "ProRes 422（专业剪辑）"),
                 ("cfhd", "CineForm（专业剪辑）"),
                 ("ffv1", "FFV1（无损归档）"),

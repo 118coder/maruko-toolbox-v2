@@ -135,6 +135,49 @@
             </select>
             <span class="lbl" style="color:var(--text-dim)">越大越快、压缩率越低</span>
           </div>
+          <div class="row" id="row-x265">
+            <span class="lbl">质量预设</span>
+            <select class="sel" id="pX265Preset" style="max-width:300px">
+              <option value="general8" selected>通用 8bit（iAvoe 调参 · 推荐）</option>
+              <option value="general10">通用 10bit（体积更小 · 推荐）</option>
+              <option value="anime10">动漫 / 低帧率 10bit</option>
+              <option value="high8">电影级高压缩 8bit（极慢）</option>
+              <option value="high10">电影级高压缩 10bit（极慢）</option>
+              <option value="fast">快速</option>
+            </select>
+            <span class="lbl" style="color:var(--text-dim)">切换预设自动填 CRF</span>
+          </div>
+          <div class="row" id="row-x264">
+            <span class="lbl">质量预设</span>
+            <select class="sel" id="pX264Preset">
+              <option value="general" selected>通用（slow · CRF 19）</option>
+              <option value="fast">快速（faster · CRF 20）</option>
+              <option value="high">高压缩（veryslow · CRF 19）</option>
+            </select>
+          </div>
+          <div class="row" id="row-nvenc">
+            <span class="lbl">预设</span>
+            <select class="sel" id="pNvPreset">
+              <option value="">默认</option>
+              <option value="p1">p1 最快</option><option value="p2">p2</option>
+              <option value="p3">p3</option><option value="p4">p4</option>
+              <option value="p5">p5</option><option value="p6">p6</option>
+              <option value="p7">p7 最慢最好</option>
+            </select>
+            <span class="lbl">Multipass</span>
+            <select class="sel" id="pNvMultipass">
+              <option value="">默认</option><option value="disabled">disabled</option>
+              <option value="qres">qres</option><option value="fullres">fullres</option>
+            </select>
+            <span class="lbl">空间AQ</span>
+            <select class="sel" id="pNvSpatialAQ">
+              <option value="">默认</option><option value="1">开</option><option value="0">关</option>
+            </select>
+            <span class="lbl">前瞻</span>
+            <select class="sel" id="pNvLookahead">
+              <option value="">默认</option><option value="0">关</option><option value="32">32 帧</option>
+            </select>
+          </div>
         </div>
         <div class="row">
           <label class="ck"><input type="radio" name="vmode" value="crf" checked />CRF</label>

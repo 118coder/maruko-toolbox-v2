@@ -155,6 +155,8 @@ pub fn encoder_tag(id: &str) -> &'static str {
         "ffv1" => "ffv1",
         "utvideo" => "utvideo",
         "libvpx-vp9" => "vp9",
+        "libx265" => "x265m",
+        "libx264" => "x264m",
         _ => "",
     }
 }
@@ -164,7 +166,7 @@ pub fn is_ffmpeg_encoder(id: &str) -> bool {
     is_gpu_encoder(id)
         || matches!(
             id,
-            "prores_ks" | "cfhd" | "ffv1" | "utvideo" | "libvpx-vp9"
+            "prores_ks" | "cfhd" | "ffv1" | "utvideo" | "libvpx-vp9" | "libx265" | "libx264"
         )
 }
 
@@ -224,6 +226,28 @@ pub fn encoder_option_args(encoder: &str, options: &std::collections::BTreeMap<S
             if let Ok(n) = opt("cpu_used").parse::<i64>() {
                 if (0..=63).contains(&n) {
                     a.extend(["-cpu-used".into(), n.to_string()]);
+                }
+            }
+        }
+        // 现代版 x265/x264（ffmpeg 内置库，Voukoder/iAvoe 预设走这里）
+        "libx265" | "libx264" => {
+            let ps_key = if encoder == "libx265" { "x265-params" } else { "x264-params" };
+            for (k, v) in options {
+                match k.as_str() {
+                    "preset" if !v.is_empty() => a.extend(["-preset".into(), v.clone()]),
+                    k2 if k2 == ps_key && !v.is_empty() => a.extend([("-".to_string() + ps_key), v.clone()]),
+                    _ => {}
+                }
+            }
+        }
+        // NVENC 参数面板白名单透传（预设/Multipass/空间AQ/Lookahead）
+        "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => {
+            for (k, v) in options {
+                if v.is_empty() {
+                    continue;
+                }
+                if matches!(k.as_str(), "preset" | "multipass" | "spatial-aq" | "lookahead") {
+                    a.extend(["-".to_string() + k, v.clone()]);
                 }
             }
         }
@@ -373,7 +397,8 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
     if !job.subtitle.is_empty() {
         vf.push(format!("subtitles='{}'", escape_filter_path(&job.subtitle)));
     }
-    vf.push("format=yuv420p".into());
+    let pix_fmt = job.enc_options.get("pix_fmt").cloned().unwrap_or_else(|| "yuv420p".into());
+    vf.push(format!("format={}", pix_fmt));
 
     let mut args: Vec<String> = vec![
         "-hide_banner".into(), "-y".into(), "-i".into(), job.input.clone(),
@@ -381,15 +406,35 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
         "-c:v".into(), job.encoder.clone(),
     ];
     let bitrate_mode = job.mode == "bitrate" || job.mode == "2pass";
-    if matches!(job.encoder.as_str(), "prores_ks" | "cfhd" | "ffv1" | "utvideo" | "libvpx-vp9") {
-        // Voukoder 风格专业编码器：参数来自 enc_options 面板
-        args.extend(encoder_option_args(&job.encoder, &job.enc_options, if bitrate_mode { 0.0 } else { job.crf }));
-    } else {
-        args.extend(crate::gpu::rate_ctl_args(
-            &job.encoder,
-            job.crf,
-            if bitrate_mode { job.bitrate } else { 0 },
-        ));
+    match job.encoder.as_str() {
+        // 现代版 x265/x264：CRF/码率由主面板控制，预设参数来自 enc_options
+        "libx265" | "libx264" => {
+            if bitrate_mode {
+                args.extend(["-b:v".into(), format!("{}k", job.bitrate)]);
+            } else {
+                args.extend(["-crf".into(), fmt_crf(job.crf)]);
+            }
+            args.extend(encoder_option_args(&job.encoder, &job.enc_options, 0.0));
+        }
+        "libvpx-vp9" => {
+            if bitrate_mode {
+                args.extend(["-b:v".into(), format!("{}k", job.bitrate)]);
+            }
+            args.extend(encoder_option_args("libvpx-vp9", &job.enc_options, if bitrate_mode { 0.0 } else { job.crf }));
+        }
+        "prores_ks" | "cfhd" | "ffv1" | "utvideo" => {
+            // 固定质量/无损：参数来自 enc_options 面板
+            args.extend(encoder_option_args(&job.encoder, &job.enc_options, 0.0));
+        }
+        _ => {
+            args.extend(crate::gpu::rate_ctl_args(
+                &job.encoder,
+                job.crf,
+                if bitrate_mode { job.bitrate } else { 0 },
+            ));
+            // NVENC 参数面板白名单透传
+            args.extend(encoder_option_args(&job.encoder, &job.enc_options, 0.0));
+        }
     }
     match job.audio_mode.as_str() {
         "copy" if has_audio => {
@@ -627,6 +672,57 @@ mod tests {
         o.insert("pred".into(), "median".into());
         let a = encoder_option_args("utvideo", &o, 0.0);
         assert!(a.contains(&"-pred".to_string()) && a.contains(&"median".to_string()));
+    }
+
+    #[test]
+    fn test_encoder_option_args_libx265() {
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("preset".into(), "slow".into());
+        o.insert("x265-params".into(), "aq-mode=4:bframes=11".into());
+        o.insert("pix_fmt".into(), "yuv420p10le".into());
+        let a = encoder_option_args("libx265", &o, 0.0);
+        let j = a.join(" ");
+        assert!(j.contains("-preset slow"));
+        assert!(j.contains("-x265-params aq-mode=4:bframes=11"));
+        // pix_fmt 不在此处（由 vf format 滤镜处理）
+        assert!(!j.contains("yuv420p10le"));
+    }
+
+    #[test]
+    fn test_encoder_option_args_nvenc_passthrough() {
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("preset".into(), "p6".into());
+        o.insert("multipass".into(), "fullres".into());
+        o.insert("spatial-aq".into(), "1".into());
+        o.insert("lookahead".into(), "32".into());
+        o.insert("evil".into(), "arg".into());
+        let a = encoder_option_args("hevc_nvenc", &o, 0.0);
+        let j = a.join(" ");
+        // BTreeMap 按字母序输出，逐项断言
+        assert!(j.contains("-preset p6"));
+        assert!(j.contains("-multipass fullres"));
+        assert!(j.contains("-spatial-aq 1"));
+        assert!(j.contains("-lookahead 32"));
+        assert!(!j.contains("evil"));
+    }
+
+    #[test]
+    fn test_gpu_plan_pix_fmt() {
+        let mut j = job();
+        j.encoder = "libx265".into();
+        j.mode = "crf".into();
+        let mut c = ctx();
+        c.audio_temp = None;
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("pix_fmt".into(), "yuv420p10le".into());
+        o.insert("preset".into(), "slow".into());
+        o.insert("x265-params".into(), "aq-mode=4:bframes=11".into());
+        j.enc_options = o;
+        let p = build_gpu_plan(&j, &c, false, 0.0).unwrap();
+        let joined = p.steps[0].args.join(" ");
+        assert!(joined.contains("format=yuv420p10le"));
+        assert!(joined.contains("-preset slow -x265-params"));
+        assert!(joined.contains("-crf 23.5"));
     }
 
     #[test]

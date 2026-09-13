@@ -129,6 +129,18 @@ function isAutoOutput() {
 /* ---- Voukoder 风格专业编码器面板 ---- */
 const PRO_CONTAINERS = { prores_ks: 'mov', cfhd: 'mov', ffv1: 'mkv', utvideo: 'mkv', 'libvpx-vp9': 'webm' };
 const NO_RATE_CONTROLS = ['prores_ks', 'cfhd', 'ffv1', 'utvideo'];
+const PRO_ROWS = { prores_ks: 'row-prores', cfhd: 'row-cfhd', ffv1: 'row-ffv1', utvideo: 'row-utvideo', 'libvpx-vp9': 'row-vp9', libx265: 'row-x265', libx264: 'row-x264' };
+
+// iAvoe x265 调参预设（参数集来源：Voukoder 内置预设 / 压制社区 iAvoe 方案，致敬原作者）
+const X265_PRESETS = {
+  general8: { label: '通用 8bit', pix_fmt: 'yuv420p', crf: '19.0', preset: 'slow', params: { ctu: '64', 'min-cu-size': '16', ref: '3', hash: '2', 'limit-tu': '1', 'tu-intra-depth': '2', 'tu-inter-depth': '2', me: 'umh', subme: '5', merange: '48', rskip: '1', weightb: '1', mcstf: '0', 'early-skip': '1', 'max-merge': '2', 'min-keyint': '5', fades: '1', bframes: '11', 'b-adapt': '2', radl: '2', 'fast-intra': '1', 'hist-scenecut': '0', crqpoffs: '-2', 'aq-mode': '4', 'aq-motion': '1', 'qg-size': '16', rd: '3', rdpenalty: '1', 'splitrd-skip': '1', 'rdoq-level': '1', 'limit-modes': '1', rect: '1', 'tskip-fast': '1', 'limit-sao': '1', 'sao-non-deblock': '1', deblock: '0:-1', 'open-gop': '0', 'allow-non-conformance': '1' } },
+  general10: { label: '通用 10bit', pix_fmt: 'yuv420p10le', crf: '19.0', preset: 'slow', params: { ctu: '64', 'min-cu-size': '16', ref: '3', hash: '2', 'limit-tu': '1', 'tu-intra-depth': '2', 'tu-inter-depth': '2', me: 'umh', subme: '5', merange: '48', rskip: '1', weightb: '1', mcstf: '0', 'early-skip': '1', 'max-merge': '2', 'min-keyint': '5', fades: '1', bframes: '11', 'b-adapt': '2', radl: '2', 'fast-intra': '1', 'hist-scenecut': '0', crqpoffs: '-2', 'aq-mode': '4', 'aq-motion': '1', 'qg-size': '16', rd: '3', rdpenalty: '1', 'splitrd-skip': '1', 'rdoq-level': '1', 'limit-modes': '1', rect: '1', 'tskip-fast': '1', 'limit-sao': '1', 'sao-non-deblock': '1', deblock: '0:-1', 'open-gop': '0', 'allow-non-conformance': '1' } },
+  anime10: { label: '动漫 / 低帧率 10bit', pix_fmt: 'yuv420p10le', crf: '22', preset: 'slow', params: { ctu: '64', ref: '3', hash: '2', 'min-cu-size': '16', 'limit-tu': '1', 'tu-intra-depth': '4', 'tu-inter-depth': '4', me: 'umh', subme: '3', merange: '48', weightb: '1', mcstf: '0', 'max-merge': '4', keyint: '480', 'min-keyint': '3', fades: '1', bframes: '16', 'b-adapt': '2', radl: '3', 'bframe-bias': '20', 'hist-scenecut': '0', 'no-fast-intra': '1', 'constrained-intra': '1', 'b-intra': '1', qpmin: '8', crqpoffs: '-4', cbqpoffs: '-2', ipratio: '1.6', pbratio: '1.3', 'cu-lossless': '1', tskip: '1', 'aq-mode': '1', 'aq-strength': '0.9', 'qg-size': '8', rd: '3', 'splitrd-skip': '1', 'rdoq-level': '2', rskip: '1', 'limit-modes': '1', 'limit-refs': '1', rect: '1', amp: '1', 'tskip-fast': '1', 'psy-rd': '1.5', 'rd-refine': '0', rdpenalty: '2', 'qp-adaptation-range': '3', deblock: '0:-1', 'limit-sao': '1', 'sao-non-deblock': '1', 'open-gop': '0', 'allow-non-conformance': '1' } },
+  high8: { label: '电影级高压缩 8bit', pix_fmt: 'yuv420p', crf: '21.8', preset: 'slow', params: { ctu: '64', ref: '3', hash: '2', 'min-cu-size': '16', 'limit-tu': '1', 'tu-intra-depth': '4', 'tu-inter-depth': '4', me: 'star', subme: '5', merange: '48', 'analyze-src-pics': '1', weightb: '1', mcstf: '0', 'max-merge': '4', keyint: '480', 'min-keyint': '3', fades: '1', bframes: '14', 'b-adapt': '2', radl: '3', 'hist-scenecut': '0', 'no-fast-intra': '1', 'constrained-intra': '1', 'b-intra': '1', qpmin: '8', crqpoffs: '-3', ipratio: '1.2', pbratio: '1.5', 'aq-mode': '4', 'aq-strength': '0.9', 'qg-size': '8', rd: '3', 'splitrd-skip': '1', 'rdoq-level': '2', 'limit-modes': '1', 'limit-refs': '0', 'no-rskip': '1', rect: '1', amp: '1', 'tskip-fast': '1', 'psy-rd': '1.6', 'rd-refine': '0', rdpenalty: '1', 'qp-adaptation-range': '3', deblock: '0:0', 'limit-sao': '1', 'sao-non-deblock': '1', 'open-gop': '0', 'allow-non-conformance': '1' } },
+  high10: { label: '电影级高压缩 10bit', pix_fmt: 'yuv420p10le', crf: '21.8', preset: 'slow', params: { ctu: '64', ref: '3', hash: '2', 'min-cu-size': '16', 'limit-tu': '1', 'tu-intra-depth': '4', 'tu-inter-depth': '4', me: 'star', subme: '5', merange: '48', 'analyze-src-pics': '1', weightb: '1', mcstf: '0', 'early-skip': '1', 'max-merge': '4', keyint: '480', 'min-keyint': '3', fades: '1', bframes: '14', 'b-adapt': '2', radl: '3', 'no-fast-intra': '1', 'hist-scenecut': '0', 'constrained-intra': '1', 'b-intra': '1', qpmin: '8', crqpoffs: '-3', ipratio: '1.2', pbratio: '1.5', 'aq-mode': '4', 'aq-strength': '0.9', 'qg-size': '8', rd: '3', 'splitrd-skip': '1', 'rdoq-level': '2', 'limit-modes': '1', 'limit-refs': '0', 'no-rskip': '1', rect: '1', amp: '1', 'tskip-fast': '1', 'psy-rd': '1.6', 'rd-refine': '0', rdpenalty: '1', 'qp-adaptation-range': '3', deblock: '0:0', 'limit-sao': '1', 'sao-non-deblock': '1', 'open-gop': '0', 'allow-non-conformance': '1' } },
+  fast: { label: '快速', pix_fmt: 'yuv420p', crf: '21', preset: 'faster', params: {} }
+};
+const X264_PRESETS = { general: { label: '通用', preset: 'slow', crf: '19' }, fast: { label: '快速', preset: 'faster', crf: '20' }, high: { label: '高压缩', preset: 'veryslow', crf: '19' } };
 
 /** 根据所选编码器：显示对应参数行、自动切换容器、禁用不适用的码控选项 */
 function syncProPanel() {
@@ -142,7 +154,7 @@ function syncProPanel() {
   for (const row of document.querySelectorAll('#proParams .row')) {
     row.style.display = 'none';
   }
-  const rowId = { prores_ks: 'row-prores', cfhd: 'row-cfhd', ffv1: 'row-ffv1', utvideo: 'row-utvideo', 'libvpx-vp9': 'row-vp9' }[id];
+  const rowId = PRO_ROWS[id];
   const row = document.getElementById(rowId);
   if (row) row.style.display = 'flex';
   const wantContainer = PRO_CONTAINERS[id];
@@ -150,8 +162,23 @@ function syncProPanel() {
     $('#vContainer').value = wantContainer;
     if (isAutoOutput()) autoFillOutput();
   }
-  const allowRate = id === 'libvpx-vp9';
+  const allowRate = !NO_RATE_CONTROLS.includes(id);
   setRateControlsEnabled(allowRate);
+  // ffmpeg 直编管线暂未实现 2Pass：仅软编（AVS 管线）开放
+  const isSoft = !isProEncoder(id) && !isGpu(id);
+  const r2 = document.querySelector('input[name=vmode][value="2pass"]');
+  if (r2) {
+    r2.disabled = !isSoft;
+    r2.closest('label.ck').style.opacity = isSoft ? '1' : '0.45';
+  }
+  if (id === 'libx265') {
+    // 切预设时自动填 CRF
+    const t = X265_PRESETS[$('#pX265Preset').value];
+    if (t && allowRate) $('#vCrf').value = t.crf;
+  } else if (id === 'libx264') {
+    const t = X264_PRESETS[$('#pX264Preset').value];
+    if (t && allowRate) $('#vCrf').value = t.crf;
+  }
 }
 
 function setRateControlsEnabled(enabled) {
@@ -187,6 +214,28 @@ function collectProOptions() {
       return { pred: val('#pUtPred') };
     case 'libvpx-vp9':
       return { deadline: val('#pVp9Deadline'), cpu_used: val('#pVp9Cpu') };
+    case 'libx265': {
+      const t = X265_PRESETS[$('#pX265Preset')?.value || 'general8'];
+      if (!t) return {};
+      // 预设参数 → x265-params（值内的冒号需转义），preset 单独走 -preset
+      const extra = Object.entries(t.params)
+        .map(([k, v]) => `${k}=${v.replace(/:/g, '\\:')}`)
+        .join(':');
+      const o = { preset: t.preset, pix_fmt: t.pix_fmt };
+      if (extra) o['x265-params'] = extra;
+      return o;
+    }
+    case 'libx264':
+      return { preset: (X264_PRESETS[$('#pX264Preset')?.value] || {}).preset || 'slow' };
+    case 'h264_nvenc':
+    case 'hevc_nvenc':
+    case 'av1_nvenc':
+      return {
+        preset: val('#pNvPreset'),
+        multipass: val('#pNvMultipass'),
+        'spatial-aq': val('#pNvSpatialAQ'),
+        lookahead: val('#pNvLookahead'),
+      };
     default:
       return {};
   }
