@@ -9,4 +9,13 @@ export function initHelp() {
     $('#hUpdateResult').textContent = r.msg;
     toast(r.msg, r.ok ? 'ok' : '');
   });
+  // 开源地址：Tauri 内导航会被拦截，走系统默认浏览器
+  $('#hRepoLink').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      await invoke('open_url', { url: 'https://github.com/118coder/maruko-toolbox-v2' });
+    } catch (err) {
+      toast('打开浏览器失败：' + err);
+    }
+  });
 }

@@ -12,7 +12,7 @@ shutil.rmtree(r"E:\maruko-build\package_full", ignore_errors=True)
 
 print("② 复制应用三件套...")
 os.makedirs(STAGE, exist_ok=True)
-shutil.copy2(APP, os.path.join(STAGE, "小丸工具箱V2现代版.exe"))
+shutil.copy2(APP, os.path.join(STAGE, "小丸工具箱V2现代版1.0.exe"))
 shutil.copy2(WV, os.path.join(STAGE, "WebView2Loader.dll"))
 
 print("③ 复制现代化工具链 tools\\（约 300MB，约需 1 分钟）...")
@@ -35,11 +35,11 @@ for junk in ("logs", "temp"):
 io.open(os.path.join(tools, "toolchain_ver.txt"), "w", encoding="utf-8").write("2026-09-14")
 
 print("⑥ 写使用说明...")
-txt = """小丸工具箱V2现代版 v2.4 · 完整版
+txt = """小丸工具箱V2现代版1.0 · 完整版
 ================================
 
 【解压即用 · 零依赖】
-把整个文件夹解压到任意位置，双击「小丸工具箱V2现代版.exe」运行。
+把整个文件夹解压到任意位置，双击「小丸工具箱V2现代版1.0.exe」运行。
 工具链已全部内置在 tools\\ 文件夹，无需安装原版小丸或任何其他软件。
 
 【唯一系统要求】
@@ -55,7 +55,7 @@ Windows 10 / 11（界面所需的 WebView2 系统自带）。
 · 批量压制（输出自动命名）· 常驻进度条 · 自动关机（60 秒可撤销）
 · AVS 滤镜脚本与预览 · MediaInfo 25（新格式探测）· 抽取
 
-【工具链版本】x265 4.3 / x264 r3214（2025，单文件多位深库，程序自动注入位深参数）/
+【工具链版本】x265 4.3 / x264 r3214（单文件多位深库，程序自动注入位深参数）/
 ffmpeg 7.1（GPU、专业编码器与全部滤镜）/ MKVToolNix 101 / MediaInfo 25.09。
 与 2016 版工具链相比，软压同画质速度明显更快、压缩率更好。
 
@@ -74,7 +74,7 @@ AviSynth 滤镜等部分组件来自用户自行安装的原版小丸工具箱�
 io.open(os.path.join(STAGE, "使用说明.txt"), "w", encoding="utf-8-sig").write(txt)
 
 print("⑦ 压缩 zip（约需 1-2 分钟）...")
-zf_path = r"E:\网页小工具\小丸新版本\小丸工具箱V3现代版-v2.4完整版.zip"
+zf_path = r"E:\网页小工具\小丸新版本\小丸工具箱V2现代版1.0完整版.zip"
 if os.path.isfile(zf_path):
     os.remove(zf_path)
 with zipfile.ZipFile(zf_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

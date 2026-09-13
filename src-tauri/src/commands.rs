@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter as _, Manager, State, Theme};
 
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = "1.0.0";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct AppState {
@@ -215,6 +215,19 @@ pub fn open_path(path: String, reveal: Option<bool>) -> Result<(), String> {
         c.arg(&path);
     }
     c.spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 用系统默认浏览器打开 URL（帮助页开源地址等；仅接受 http/https）。
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("仅支持 http/https 链接：{}", url));
+    }
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

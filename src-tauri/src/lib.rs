@@ -105,6 +105,7 @@ pub fn run() {
             commands::pick_folder,
             commands::file_exists,
             commands::open_path,
+            commands::open_url,
             commands::mediainfo_analyze,
             commands::encode_video,
             commands::encode_video_batch,
