@@ -11,6 +11,7 @@ pub struct Tools {
     pub mediainfo_x64: String,
     pub vsfilter: String,
     pub encoders: Vec<EncoderEntry>, // 视频编码器下拉（软编 + GPU）
+    pub ffmpeg_encoders: Vec<EncoderEntry>, // Voukoder 风格专业编码器（ffmpeg 后端）
     pub audio_encoders: Vec<AudioEnc>,
     pub avs_plugins: Vec<String>,   // tools\avs\plugins 下可用滤镜
     pub gpu_info: Vec<GpuEntry>,
@@ -207,6 +208,9 @@ pub fn resolve(settings: &crate::settings::Settings) -> Tools {
         }
     }
 
+    // 专业编码器（ffmpeg 后端）：由 commands 层用 -encoders 输出过滤可用性后填充
+    let ffmpeg_encoders: Vec<EncoderEntry> = Vec::new();
+
     Tools {
         tools_dir: tools_dir.map(|t| t.to_string_lossy().to_string()).unwrap_or_default(),
         ffmpeg: ffmpeg.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
@@ -217,6 +221,7 @@ pub fn resolve(settings: &crate::settings::Settings) -> Tools {
         audio_encoders,
         avs_plugins,
         gpu_info: Vec::new(), // 由 gpu.rs 探测后填充
+        ffmpeg_encoders,
         notes,
     }
 }

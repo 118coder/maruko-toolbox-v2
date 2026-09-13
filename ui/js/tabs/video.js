@@ -2,7 +2,7 @@
 
 import { invoke } from '../bridge.js';
 import { $, bindFileField, makeListBox, initNumBoxes, toast, setFieldValue } from '../components.js';
-import { state, videoEncoderOptions, isGpu, saveSettings, encoderTag, taggedName } from '../state.js';
+import { state, videoEncoderOptions, isGpu, isProEncoder, saveSettings, encoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
 
 let batch;
@@ -19,7 +19,7 @@ export function initVideo() {
   // 输出名自动生成：源目录/名+编码器标签+容器（测试.mp4 → 测试x264.mp4）
   // 用户手动选择过输出后不再覆盖（dataset.auto 清空），直到下次输入变化
   $('#vVideo').addEventListener('change', autoFillOutput);
-  $('#vEncoder').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); refreshGpuHint(); });
+  $('#vEncoder').addEventListener('change', () => { syncProPanel(); if (isAutoOutput()) autoFillOutput(); refreshGpuHint(); });
   $('#vContainer').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); });
 
   // 保持原分辨率 → 宽/高锁定
@@ -32,6 +32,7 @@ export function initVideo() {
   setResLocked();
 
   initNumBoxes();
+  syncProPanel();
 
   // 编码器下拉（工具信息加载后由 refreshEncoders 填充）
   // 模式切换：CRF ⇄ 码率 共用同一个数字框
@@ -125,6 +126,44 @@ function isAutoOutput() {
   return $('#vOutput').dataset.auto === '1';
 }
 
+/* ---- Voukoder 风格专业编码器面板 ---- */
+const PRO_CONTAINERS = { prores_ks: 'mov', cfhd: 'mov', ffv1: 'mkv', utvideo: 'mkv', 'libvpx-vp9': 'webm' };
+const NO_RATE_CONTROLS = ['prores_ks', 'cfhd', 'ffv1', 'utvideo'];
+
+/** 根据所选编码器：显示对应参数行、自动切换容器、禁用不适用的码控选项 */
+function syncProPanel() {
+  const id = $('#vEncoder').value;
+  const isPro = isProEncoder(id);
+  $('#proParams').style.display = isPro ? 'block' : 'none';
+  if (!isPro) {
+    setRateControlsEnabled(true);
+    return;
+  }
+  for (const row of document.querySelectorAll('#proParams .row')) {
+    row.style.display = 'none';
+  }
+  const rowId = { prores_ks: 'row-prores', cfhd: 'row-cfhd', ffv1: 'row-ffv1', utvideo: 'row-utvideo', 'libvpx-vp9': 'row-vp9' }[id];
+  const row = document.getElementById(rowId);
+  if (row) row.style.display = 'flex';
+  const wantContainer = PRO_CONTAINERS[id];
+  if (wantContainer && $('#vContainer').value !== wantContainer) {
+    $('#vContainer').value = wantContainer;
+    if (isAutoOutput()) autoFillOutput();
+  }
+  const allowRate = id === 'libvpx-vp9';
+  setRateControlsEnabled(allowRate);
+}
+
+function setRateControlsEnabled(enabled) {
+  for (const r of document.querySelectorAll('input[name=vmode]')) {
+    r.disabled = !enabled;
+    r.closest('label.ck').style.opacity = enabled ? '1' : '0.45';
+  }
+  const crf = $('#vCrf');
+  crf.disabled = !enabled;
+  crf.closest('.num').style.opacity = enabled ? '1' : '0.45';
+}
+
 function autoFillOutput() {
   const input = $('#vVideo').value;
   if (!input) return;
@@ -132,8 +171,34 @@ function autoFillOutput() {
   $('#vOutput').dataset.auto = '1';
 }
 
+/** 收集当前所选专业编码器的参数 */
+function collectProOptions() {
+  const id = $('#vEncoder').value;
+  if (!isProEncoder(id)) return {};
+  const val = (sel) => $(sel)?.value || '';
+  switch (id) {
+    case 'prores_ks':
+      return { profile: val('#pProResProfile'), qscale: $('#pProResQ')?.value || '9' };
+    case 'cfhd':
+      return { quality: val('#pCfhdQuality') };
+    case 'ffv1':
+      return { coder: val('#pFfv1Coder') };
+    case 'utvideo':
+      return { pred: val('#pUtPred') };
+    case 'libvpx-vp9':
+      return { deadline: val('#pVp9Deadline'), cpu_used: val('#pVp9Cpu') };
+    default:
+      return {};
+  }
+}
+
 function refreshGpuHint() {
-  $('#vEncoder').title = isGpu($('#vEncoder').value) ? 'GPU 编码器：不支持 2Pass 与 AVS 滤镜管线' : '';
+  const id = $('#vEncoder').value;
+  $('#vEncoder').title = isGpu(id)
+    ? 'GPU 编码器：不支持 2Pass 与 AVS 滤镜管线'
+    : isProEncoder(id)
+      ? '专业编码器（ffmpeg 后端）：不支持 2Pass 与 AVS 滤镜管线'
+      : '';
 }
 
 function buildJob(input, output, containerOverride) {
@@ -157,6 +222,7 @@ function buildJob(input, output, containerOverride) {
     audioBitrate: state.audio.bitrate,
     subtitle: $('#vSubtitle').value || '',
     container: containerOverride || $('#vContainer').value,
+    encOptions: collectProOptions(),
     avsScript: '',
     shutdownAfter: $('#vShutdown').checked,
   };
@@ -195,6 +261,7 @@ export function refreshEncoders() {
   }
   if (cur && opts.some((e) => e.id === cur)) sel.value = cur;
   refreshGpuHint();
+  syncProPanel();
   if (isAutoOutput()) autoFillOutput();
 }
 

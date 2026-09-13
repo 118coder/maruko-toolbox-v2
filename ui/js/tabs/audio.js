@@ -27,7 +27,21 @@ export function initAudio() {
 
   // 输出名自动生成：源目录/名+编码器标签+扩展名（测试.wav → 测试nero.m4a）
   $('#aInput').addEventListener('change', autoFillOutput);
-  $('#aEncoder').addEventListener('change', () => { if (isAutoOutput()) autoFillOutput(); });
+  // 码率选项按编码器动态调整（AC3/E-AC3 支持更高码率）
+  const DEFAULT_BR = ['32', '48', '64', '80', '96', '112', '128', '160', '192', '224', '256', '320'];
+  const AC3_BR = ['128', '192', '256', '320', '384', '448', '512', '640'];
+  const rebuildBitrateOptions = () => {
+    const enc = sel.value;
+    const list = enc === 'ac3' || enc === 'eac3' ? AC3_BR : DEFAULT_BR;
+    const cur = $('#aBitrate').value;
+    $('#aBitrate').innerHTML = list.map((v) => `<option>${v}</option>`).join('');
+    if (list.includes(cur)) $('#aBitrate').value = cur;
+    else $('#aBitrate').value = enc === 'ac3' || enc === 'eac3' ? '448' : '128';
+    state.audio.bitrate = parseInt($('#aBitrate').value) || 128;
+  };
+  rebuildBitrateOptions();
+
+    $('#aEncoder').addEventListener('change', () => { rebuildBitrateOptions(); if (isAutoOutput()) autoFillOutput(); });
 
   // 模式切换
   for (const r of document.querySelectorAll('input[name=amode]')) {
@@ -104,7 +118,7 @@ function autoFillOutput() {
 }
 
 function outputExtOf(enc) {
-  return ({ neroaac: 'm4a', qaac: 'm4a', fdkaac: 'm4a', lame: 'mp3', flac: 'flac', ffmpeg_aac: 'm4a' })[enc] || 'm4a';
+  return ({ neroaac: 'm4a', qaac: 'm4a', fdkaac: 'm4a', lame: 'mp3', flac: 'flac', ffmpeg_aac: 'm4a', ac3: 'ac3', eac3: 'eac3', opus: 'opus' })[enc] || 'm4a';
 }
 
 function buildJob(input, output) {

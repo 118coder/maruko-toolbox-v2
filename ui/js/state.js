@@ -41,6 +41,9 @@ export function videoEncoderOptions() {
   for (const g of state.tools?.gpuInfo || []) {
     if (g.ok) opts.push({ id: g.id, label: g.label });
   }
+  for (const f of state.tools?.ffmpegEncoders || []) {
+    opts.push({ id: f.id, label: f.label });
+  }
   return opts;
 }
 
@@ -52,7 +55,13 @@ export function encoderTag(id) {
   if (id.includes('nvenc')) return 'nvenc';
   if (id.includes('qsv')) return 'qsv';
   if (id.includes('amf')) return 'amf';
-  return '';
+  const pro = { prores_ks: 'prores', cfhd: 'cineform', ffv1: 'ffv1', utvideo: 'utvideo', 'libvpx-vp9': 'vp9' };
+  return pro[id] || '';
+}
+
+/** 是否 Voukoder 风格专业编码器（ffmpeg 后端） */
+export function isProEncoder(id) {
+  return ['prores_ks', 'cfhd', 'ffv1', 'utvideo', 'libvpx-vp9'].includes(id);
 }
 
 /** 音频编码器命名标签（与后端对齐）：测试.wav + NeroAAC → 测试nero.m4a */

@@ -35,6 +35,9 @@ pub fn encoder_tag(encoder: &str) -> &'static str {
         "lame" => "lame",
         "flac" => "flac",
         "ffmpeg_aac" => "aac",
+        "ac3" => "ac3",
+        "eac3" => "eac3",
+        "opus" => "opus",
         _ => "audio",
     }
 }
@@ -43,7 +46,24 @@ pub fn output_ext(encoder: &str) -> &'static str {
     match encoder {
         "lame" => "mp3",
         "flac" => "flac",
+        "ac3" => "ac3",
+        "eac3" => "eac3",
+        "opus" => "opus",
         _ => "m4a",
+    }
+}
+
+/// 纯 ffmpeg 编码的音频（原生 aac / ac3 / eac3 / opus）
+pub fn is_ffmpeg_audio(encoder: &str) -> bool {
+    matches!(encoder, "ffmpeg_aac" | "ac3" | "eac3" | "opus")
+}
+
+fn ffmpeg_audio_codec(encoder: &str) -> &'static str {
+    match encoder {
+        "ac3" => "ac3",
+        "eac3" => "eac3",
+        "opus" => "libopus",
+        _ => "aac",
     }
 }
 
@@ -61,17 +81,22 @@ pub fn build_steps(job: &AudioJob, tools_dir: &str, ffmpeg: &str, temp_base: &st
     };
     let mut steps = Vec::new();
 
-    if job.encoder == "ffmpeg_aac" {
+    if is_ffmpeg_audio(&job.encoder) {
         if ffmpeg.is_empty() {
             return Err("未找到 ffmpeg".into());
         }
-        let mut s = Step::new("音频编码 ffmpeg AAC", ffmpeg, vec![
+        let codec = ffmpeg_audio_codec(&job.encoder);
+        let mut args = vec![
             "-hide_banner".into(), "-y".into(), "-i".into(), job.input.clone(),
             "-vn".into(),
-            "-c:a".into(), "aac".into(),
+            "-c:a".into(), codec.into(),
             "-b:a".into(), format!("{}k", job.bitrate),
-            output.clone(),
-        ]);
+        ];
+        if job.encoder == "opus" {
+            args.extend(["-vbr".into(), "on".into()]);
+        }
+        args.push(output.clone());
+        let mut s = Step::new(&format!("音频编码 ffmpeg {}", codec), ffmpeg, args);
         s.parser = Parser::Ffmpeg { duration: 0.0 };
         steps.push(s);
         return Ok(steps);
@@ -195,10 +220,16 @@ pub fn build_merge_steps(
         s.parser = Parser::Ffmpeg { duration: 0.0 };
         return Ok(vec![s]);
     }
-    if encoder == "ffmpeg_aac" {
-        args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", bitrate)]);
+    if is_ffmpeg_audio(encoder) {
+        args.extend([
+            "-c:a".into(), ffmpeg_audio_codec(encoder).into(),
+            "-b:a".into(), format!("{}k", bitrate),
+        ]);
+        if encoder == "opus" {
+            args.extend(["-vbr".into(), "on".into()]);
+        }
         args.push(output.to_string());
-        let mut s = Step::new("合并音频 (AAC)", ffmpeg, args);
+        let mut s = Step::new(&format!("合并音频 ({})", ffmpeg_audio_codec(encoder)), ffmpeg, args);
         s.parser = Parser::Ffmpeg { duration: 0.0 };
         return Ok(vec![s]);
     }
@@ -276,6 +307,19 @@ mod tests {
         assert_eq!(encoder_tag("neroaac"), "nero");
         assert_eq!(encoder_tag("qaac"), "qaac");
         assert_eq!(encoder_tag("fdkaac"), "fdk");
+    }
+
+    #[test]
+    fn test_ffmpeg_audio_encoders() {
+        assert!(is_ffmpeg_audio("ac3"));
+        assert!(is_ffmpeg_audio("eac3"));
+        assert!(is_ffmpeg_audio("opus"));
+        let j = AudioJob { input: "a.wav".into(), output: "o.ac3".into(), encoder: "ac3".into(), bitrate: 448, ..Default::default() };
+        let st = build_steps(&j, "T:\\", "T:\\ffmpeg.exe", "C:\\tmp\\j1").unwrap();
+        assert_eq!(st.len(), 1);
+        let j2 = st[0].args.join(" ");
+        assert!(j2.contains("-c:a ac3 -b:a 448k"));
+        assert_eq!(output_ext("opus"), "opus");
     }
 
     #[test]

@@ -76,6 +76,66 @@
           <span class="num" data-step="1"><input id="vFrames" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
         </div>
+        <!-- Voukoder 风格专业编码器参数面板（按所选编码器显示） -->
+        <div id="proParams" style="display:none">
+          <div class="row" id="row-prores">
+            <span class="lbl">ProRes 规格</span>
+            <select class="sel" id="pProResProfile">
+              <option value="auto">自动</option>
+              <option value="proxy">422 Proxy</option>
+              <option value="lt">422 LT</option>
+              <option value="standard" selected>422 Standard</option>
+              <option value="hq">422 HQ</option>
+              <option value="4444">4444</option>
+              <option value="4444xq">4444 XQ</option>
+            </select>
+            <span class="lbl">质量 qscale</span>
+            <span class="num" data-step="1"><input id="pProResQ" value="9" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+            <span class="lbl" style="color:var(--text-dim)">（1-31，越低质量越高）</span>
+          </div>
+          <div class="row" id="row-cfhd">
+            <span class="lbl">CineForm 质量档</span>
+            <select class="sel" id="pCfhdQuality">
+              <option value="film1" selected>Film1（基础）</option>
+              <option value="film2">Film2</option>
+              <option value="film3">Film3</option>
+              <option value="film4">Film4</option>
+              <option value="film5">Film5（最高）</option>
+            </select>
+          </div>
+          <div class="row" id="row-ffv1">
+            <span class="lbl">熵编码器</span>
+            <select class="sel" id="pFfv1Coder">
+              <option value="0" selected>Range Coder（默认）</option>
+              <option value="1">Range Golomb</option>
+            </select>
+            <span class="lbl" style="color:var(--text-dim)">无损归档编码，无需码控</span>
+          </div>
+          <div class="row" id="row-utvideo">
+            <span class="lbl">预测方向</span>
+            <select class="sel" id="pUtPred">
+              <option value="left">Left</option>
+              <option value="gradient">Gradient</option>
+              <option value="median" selected>Median</option>
+              <option value="none">None</option>
+            </select>
+            <span class="lbl" style="color:var(--text-dim)">无损编码，无需码控</span>
+          </div>
+          <div class="row" id="row-vp9">
+            <span class="lbl">Deadline</span>
+            <select class="sel" id="pVp9Deadline">
+              <option value="good" selected>good（推荐）</option>
+              <option value="best">best（最慢）</option>
+              <option value="realtime">realtime</option>
+            </select>
+            <span class="lbl">CPU 档位</span>
+            <select class="sel" id="pVp9Cpu">
+              <option>0</option><option>1</option><option>2</option>
+              <option>3</option><option selected>4</option><option>5</option>
+            </select>
+            <span class="lbl" style="color:var(--text-dim)">越大越快、压缩率越低</span>
+          </div>
+        </div>
         <div class="row">
           <label class="ck"><input type="radio" name="vmode" value="crf" checked />CRF</label>
           <label class="ck"><input type="radio" name="vmode" value="bitrate" />自定义</label>
@@ -121,6 +181,8 @@
           <select class="sel" id="vContainer">
             <option value="mp4">mp4</option>
             <option value="mkv">mkv</option>
+            <option value="mov">mov</option>
+            <option value="webm">webm</option>
           </select>
           <span class="spacer"></span>
           <button class="btn primary" id="vBatchGo">压制</button>
@@ -335,6 +397,7 @@
           <select class="sel" id="cvFormat">
             <option>flv</option><option>mp4</option><option>mkv</option>
             <option>mov</option><option>ts</option><option>webm</option><option>avi</option>
+            <option>mpegts</option>
           </select>
           <label class="ck"><input type="checkbox" id="cvSrcDir" checked />输出到源文件目录</label>
           <span class="spacer"></span>

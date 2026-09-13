@@ -103,6 +103,28 @@ pub fn get_tools_info(state: State<AppState>) -> Tools {
     let s = state.settings.lock().unwrap().clone();
     let mut tools = locator::resolve(&s);
     tools.gpu_info = state.gpu.detect(&tools.ffmpeg);
+    // Voukoder 风格专业编码器：解析 ffmpeg -encoders 过滤精选清单
+    if !tools.ffmpeg.is_empty() {
+        if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
+            let txt = String::from_utf8_lossy(&o.stdout);
+            let curated: &[(&str, &str)] = &[
+                ("prores_ks", "ProRes 422（专业剪辑）"),
+                ("cfhd", "CineForm（专业剪辑）"),
+                ("ffv1", "FFV1（无损归档）"),
+                ("utvideo", "UtVideo（无损）"),
+                ("libvpx-vp9", "VP9（webm）"),
+            ];
+            for (id, label) in curated {
+                if txt.contains(&format!(" {}", id)) {
+                    tools.ffmpeg_encoders.push(locator::EncoderEntry {
+                        id: id.to_string(),
+                        label: label.to_string(),
+                        gpu: false,
+                    });
+                }
+            }
+        }
+    }
     tools
 }
 
@@ -291,7 +313,7 @@ fn prepare_video_job(
     if let Some(suffix) = subtitle_override {
         job.subtitle = resolve_batch_subtitle(&job.input, &suffix).unwrap_or_default();
     }
-    let gpu = cli::video::is_gpu_encoder(&job.encoder);
+    let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
     if !gpu && tools.tools_dir.is_empty() {
         return Err("未找到工具链目录，软编码不可用（设置页指定工具链目录）".into());
     }
@@ -376,7 +398,7 @@ fn file_name(p: &str) -> String {
 
 #[tauri::command]
 pub fn encode_video(state: State<AppState>, mut job: VideoJob) -> Result<u32, String> {
-    let gpu = cli::video::is_gpu_encoder(&job.encoder);
+    let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
     let (ctx, has_audio, duration) = prepare_video_job(&state, &mut job, None)?;
     let plan = if gpu {
         cli::video::build_gpu_plan(&job, &ctx, has_audio, duration)?
@@ -393,7 +415,7 @@ pub fn encode_video_batch(state: State<AppState>, mut jobs: Vec<VideoJob>, subSu
     let opts = run_opts(&state.settings.lock().unwrap());
     let mut ids = Vec::new();
     for job in jobs.iter_mut() {
-        let gpu = cli::video::is_gpu_encoder(&job.encoder);
+        let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
         let (ctx, has_audio, duration) = prepare_video_job(&state, job, Some(subSuffix.clone()))?;
         let plan = if gpu {
             cli::video::build_gpu_plan(job, &ctx, has_audio, duration)?

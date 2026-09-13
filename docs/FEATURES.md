@@ -72,6 +72,17 @@
 | 工具链目录 / ffmpeg 路径（新增） | ✅ | GPU 与便携场景需要 |
 | 还原默认 / 查看日志 / 删除日志 | ✅ | |
 
+## Voukoder 风格专业编码器（V2.1 新增）
+| 功能 | 状态 | 说明 |
+| --- | --- | --- |
+| ProRes 422（prores_ks，mov） | ✅ | 规格下拉（Proxy→4444 XQ）+ 质量档 |
+| CineForm（cfhd，mov） | ✅ | Film1-5 质量档 |
+| FFV1 / UtVideo（无损归档） | ✅ | 熵编码 / 预测方向参数 |
+| VP9（libvpx-vp9，webm） | ✅ | CRF + deadline + cpu-used |
+| 音频 AC3 / E-AC3 / Opus | ✅ | ffmpeg 后端，码率可调 |
+| 封装转换新增 mov / webm / mpegts | ✅ | |
+| 参数面板联动 | ✅ | 选专业编码器自动切容器、禁用不适用码控 |
+
 ## 已知限制（如实记录）
 1. GPU 编码器不经过 AVS 管线，AVS 页滤镜仅部分等效支持（D18）。
 2. MediaInfo 输出格式与原版 MediaInfo GUI 文本视图一致；ffprobe 回退时格式略有差异。

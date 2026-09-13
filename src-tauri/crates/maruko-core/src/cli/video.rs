@@ -24,6 +24,7 @@ pub struct VideoJob {
     pub container: String,     // mp4 | mkv
     pub avs_script: String,    // 非空 = 原样使用（AVS 页）
     pub avs_filters: Option<crate::avs::AvsFilters>, // AVS 页结构化滤镜
+    pub enc_options: std::collections::BTreeMap<String, String>, // 编码器专属参数（Voukoder 风格面板）
     pub shutdown_after: bool,
 }
 
@@ -49,6 +50,7 @@ impl Default for VideoJob {
             container: "mp4".into(),
             avs_script: String::new(),
             avs_filters: None,
+            enc_options: Default::default(),
             shutdown_after: false,
         }
     }
@@ -146,7 +148,88 @@ pub fn encoder_tag(id: &str) -> &'static str {
     if id.contains("amf") {
         return "amf";
     }
-    ""
+    // Voukoder 风格专业编码器（ffmpeg 后端）
+    match id {
+        "prores_ks" => "prores",
+        "cfhd" => "cineform",
+        "ffv1" => "ffv1",
+        "utvideo" => "utvideo",
+        "libvpx-vp9" => "vp9",
+        _ => "",
+    }
+}
+
+/// 走 ffmpeg 直编管线的编码器（GPU + 专业/无损编码器），与 AVS 软编管线区分。
+pub fn is_ffmpeg_encoder(id: &str) -> bool {
+    is_gpu_encoder(id)
+        || matches!(
+            id,
+            "prores_ks" | "cfhd" | "ffv1" | "utvideo" | "libvpx-vp9"
+        )
+}
+
+/// 编码器专属参数 → ffmpeg 参数（Voukoder 风格面板注入点）。
+pub fn encoder_option_args(encoder: &str, options: &std::collections::BTreeMap<String, String>, crf: f64) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    let opt = |k: &str| options.get(k).cloned().unwrap_or_default();
+    match encoder {
+        // ProRes：质量 qscale 1-31（越低越好）+ profile
+        "prores_ks" => {
+            if let Some(q) = options.get("qscale") {
+                if let Ok(n) = q.parse::<i64>() {
+                    if (1..=31).contains(&n) {
+                        a.extend(["-qscale:v".into(), n.to_string()]);
+                    }
+                }
+            }
+            match opt("profile").as_str() {
+                "proxy" | "lt" | "standard" | "hq" | "4444" | "4444xq" => {
+                    a.extend(["-profile:v".into(), opt("profile")]);
+                }
+                _ => {}
+            }
+        }
+        // CineForm：质量档位
+        "cfhd" => match opt("quality").as_str() {
+            "film1" | "film2" | "film3" | "film4" | "film5" => {
+                a.extend(["-quality".into(), opt("quality")]);
+            }
+            _ => {}
+        },
+        // FFV1 无损：熵编码器
+        "ffv1" => match opt("coder").as_str() {
+            "0" | "1" => {
+                a.extend(["-coder".into(), opt("coder")]);
+            }
+            _ => {}
+        },
+        // UtVideo 无损：帧内预测方向
+        "utvideo" => match opt("pred").as_str() {
+            "none" | "left" | "gradient" | "median" => {
+                a.extend(["-pred".into(), opt("pred")]);
+            }
+            _ => {}
+        },
+        // VP9：CRF 恒定质量（-b:v 0）或目标码率 + 速度档
+        "libvpx-vp9" => {
+            if crf > 0.0 {
+                a.extend(["-crf".into(), fmt_crf(crf), "-b:v".into(), "0".into()]);
+            }
+            match opt("deadline").as_str() {
+                "good" | "best" | "realtime" => {
+                    a.extend(["-deadline".into(), opt("deadline")]);
+                }
+                _ => {}
+            }
+            if let Ok(n) = opt("cpu_used").parse::<i64>() {
+                if (0..=63).contains(&n) {
+                    a.extend(["-cpu-used".into(), n.to_string()]);
+                }
+            }
+        }
+        _ => {}
+    }
+    a
 }
 
 pub fn fmt_crf(crf: f64) -> String {
@@ -298,11 +381,16 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
         "-c:v".into(), job.encoder.clone(),
     ];
     let bitrate_mode = job.mode == "bitrate" || job.mode == "2pass";
-    args.extend(crate::gpu::rate_ctl_args(
-        &job.encoder,
-        job.crf,
-        if bitrate_mode { job.bitrate } else { 0 },
-    ));
+    if matches!(job.encoder.as_str(), "prores_ks" | "cfhd" | "ffv1" | "utvideo" | "libvpx-vp9") {
+        // Voukoder 风格专业编码器：参数来自 enc_options 面板
+        args.extend(encoder_option_args(&job.encoder, &job.enc_options, if bitrate_mode { 0.0 } else { job.crf }));
+    } else {
+        args.extend(crate::gpu::rate_ctl_args(
+            &job.encoder,
+            job.crf,
+            if bitrate_mode { job.bitrate } else { 0 },
+        ));
+    }
     match job.audio_mode.as_str() {
         "copy" if has_audio => {
             args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a:0".into(), "-c:a".into(), "copy".into()]);
@@ -319,11 +407,12 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
         args.extend(["-movflags".into(), "+faststart".into()]);
     }
     args.push(job.output.clone());
-    let mut step = Step::new("视频编码 (GPU)", &ctx.ffmpeg, args);
+    let kind_label = if crate::cli::video::is_gpu_encoder(&job.encoder) { "GPU" } else { "ffmpeg" };
+    let mut step = Step::new(&format!("视频编码（{}）", kind_label), &ctx.ffmpeg, args);
     step.parser = Parser::Ffmpeg { duration };
     Ok(Plan {
-        title: format!("压制 {}（GPU）", std::path::Path::new(&job.input)
-            .file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+        title: format!("压制 {}（{}）", std::path::Path::new(&job.input)
+            .file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), kind_label),
         output: job.output.clone(),
         steps: vec![step],
         shutdown_after: job.shutdown_after,
@@ -501,6 +590,50 @@ mod tests {
         assert!(joined.contains("trim=start_frame=100:end_frame=300,setpts=PTS-STARTPTS"));
         assert!(joined.contains("-an"));
         assert!(!joined.contains("faststart"));
+    }
+
+    #[test]
+    fn test_is_ffmpeg_encoder() {
+        assert!(is_ffmpeg_encoder("h264_nvenc"));
+        assert!(is_ffmpeg_encoder("prores_ks"));
+        assert!(is_ffmpeg_encoder("libvpx-vp9"));
+        assert!(!is_ffmpeg_encoder("x265_64-8bit[gcc].exe"));
+    }
+
+    #[test]
+    fn test_encoder_option_args_prores() {
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("profile".into(), "hq".into());
+        o.insert("qscale".into(), "9".into());
+        let a = encoder_option_args("prores_ks", &o, 0.0);
+        assert!(a.contains(&"-profile:v".to_string()) && a.contains(&"hq".to_string()));
+        assert!(a.contains(&"-qscale:v".to_string()) && a.contains(&"9".to_string()));
+    }
+
+    #[test]
+    fn test_encoder_option_args_vp9() {
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("deadline".into(), "good".into());
+        o.insert("cpu_used".into(), "3".into());
+        let a = encoder_option_args("libvpx-vp9", &o, 30.0);
+        let j = a.join(" ");
+        assert!(j.contains("-crf 30 -b:v 0"));
+        assert!(j.contains("-deadline good -cpu-used 3"));
+    }
+
+    #[test]
+    fn test_encoder_option_args_lossless() {
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("pred".into(), "median".into());
+        let a = encoder_option_args("utvideo", &o, 0.0);
+        assert!(a.contains(&"-pred".to_string()) && a.contains(&"median".to_string()));
+    }
+
+    #[test]
+    fn test_encoder_tag_pro() {
+        assert_eq!(encoder_tag("prores_ks"), "prores");
+        assert_eq!(encoder_tag("cfhd"), "cineform");
+        assert_eq!(encoder_tag("libvpx-vp9"), "vp9");
     }
 
     #[test]
