@@ -624,6 +624,21 @@ mod tests {
     }
 
     #[test]
+    fn test_soft_plan_10bit_2pass_depth() {
+        // 2pass 两遍都必须带位深参数（multilib 单 exe 场景）
+        let mut j = job();
+        j.encoder = "x265_64-10bit[gcc].exe".into();
+        j.mode = "2pass".into();
+        j.bitrate = 800;
+        j.audio_mode = "none".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        let s1 = p.steps[0].args.join(" ");
+        let s2 = p.steps[1].args.join(" ");
+        assert!(s1.contains("--pass 1") && s1.contains("--bitrate 800") && s1.contains("-D 10"));
+        assert!(s2.contains("--pass 2") && s2.contains("-D 10"));
+    }
+
+    #[test]
     fn test_soft_plan_threads() {
         let mut j = job();
         let mut c = ctx();

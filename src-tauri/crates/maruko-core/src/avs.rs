@@ -212,6 +212,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_write_script_ansi_gbk_bytes() {
+        let dir = std::env::temp_dir().join("maruko-avs-ansi-test");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 中文按 GBK 落盘（"小" = 0xD0 0xA1），ASCII 段不变
+        let p1 = dir.join("t1.avs");
+        write_script_ansi(p1.to_str().unwrap(), "小丸\nLoadPlugin(\"x\")\n").unwrap();
+        let b1 = std::fs::read(&p1).unwrap();
+        assert_eq!(&b1[..2], &[0xD0, 0xA1]);
+        assert!(b1.ends_with(b"LoadPlugin(\"x\")\n"));
+
+        // GBK 不可表示字符（emoji）→ 整体回退 UTF-8（AviSynth 会拒绝，属已知残余风险）
+        let p2 = dir.join("t2.avs");
+        write_script_ansi(p2.to_str().unwrap(), "path \u{1F600}\n").unwrap();
+        let b2 = std::fs::read(&p2).unwrap();
+        assert!(b2.windows(4).any(|w| w == [0xF0, 0x9F, 0x98, 0x80]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_crop_margins() {
         assert_eq!(crop_line("8,0,-8,0", 1920, 1080).unwrap(), "Crop(8, 0, 1904, 1080)");
     }
