@@ -102,3 +102,13 @@
 - 仓库策略（用户拍板）：**仓库仅源码**；历史中 165MB zip 已 filter-branch 清除（曾致 push 被拒 GH001），.gitignore 加 `*.zip`；完整包作为 **GitHub Release 发行包**上传（tag v1.0）
 - 发布链路：`git push --force-with-lease`（历史改写后必须 force）→ API 创建 Release → 上传 asset。代理实际端口 **7897**（环境变量里的 7890 是错的，用户机器监听 7897）；git 凭据可用 `git credential fill` 提取（GCM 的 PAT，可调 GitHub API）
 - Release：https://github.com/118coder/maruko-toolbox-v2/releases/tag/v1.0
+
+### 滤镜丢失修复（用户反馈，2026-09-14）
+现象：完整版用户反馈 AVS「滤镜丢失」。排查链路（zip 内容 → 目录 → 加载机制）：
+1. zip 内 avs\plugins 105 个文件与原版 100% 一致（含 UnDot.dll），**文件没丢**
+2. 真因一：**AviSynth 2.6 的 plugins 目录自动加载依赖安装器写入的注册表项**，原版安装时 NSIS 写入，绿色完整包没人写 → 90+ 自动加载滤镜全部失效，只有脚本里显式 LoadPlugin 的（LSMASH/FFMS2/VSFilter）能用 → UnDot() 报 "no function named"
+3. 真因二：**AviSynth 2.6 只接受 ANSI（系统代码页）脚本**，实测对 UTF-8 连 BOM 都直接拒绝（"UTF-8 source files are not supported"）；而程序此前用 std::fs::write 写 UTF-8 → 脚本里任何中文路径（中文目录解压/中文视频名/中文字幕名）在 AviSynth 眼里都是乱码
+修复（maruko-core）：
+1. avs.rs：Undot() 前显式 LoadPlugin UnDot.dll（顺带统一四处 LoadPlugin 的反斜杠转义为双反斜杠）
+2. avs.rs 新增 write_script_ansi()：脚本按 GBK 编码落盘（ASCII 无损；含 GBK 不可表示字符时回退 UTF-8 不劣化）；commands.rs 三处写 AVS（压制/保存/预览）全部改走它
+验证：GBK 脚本 + 中文路径 + UnDot/LSMASH 显式加载 + Undot()/Tweak() 实测编码通过（hevc yuv420p）；63 单测全过。修复后中文目录解压、中文视频名、中文字幕路径的 AVS 管线全部可用。

@@ -122,11 +122,11 @@ pub fn build_script(
     let plugins = format!("{}\\plugins", avs_dir);
     match demuxer {
         Demuxer::Lsmash => {
-            s.push_str(&format!("LoadPlugin(\"{}\\LSMASHSource.dll\")\n", plugins.replace('\\', "\\\\")));
+            s.push_str(&format!("LoadPlugin(\"{}\\\\LSMASHSource.dll\")\n", plugins.replace('\\', "\\\\")));
             s.push_str(&format!("LWLibavVideoSource(\"{}\", cache = false)\n", video_path.replace('"', "")));
         }
         Demuxer::Ffms2 => {
-            s.push_str(&format!("LoadPlugin(\"{}\\ffms2.dll\")\n", plugins.replace('\\', "\\\\")));
+            s.push_str(&format!("LoadPlugin(\"{}\\\\ffms2.dll\")\n", plugins.replace('\\', "\\\\")));
             s.push_str(&format!("FFVideoSource(\"{}\", threads = 1)\n", video_path.replace('"', "")));
         }
     }
@@ -160,6 +160,9 @@ pub fn build_script(
         s.push_str(&format!("Sharpen({})\n", num(a)));
     }
     if filters.undot {
+        // AviSynth 2.6 的 plugins 目录自动加载依赖安装器写入的注册表项，
+        // 便携完整包场景下不存在，所有外置滤镜必须显式 LoadPlugin
+        s.push_str(&format!("LoadPlugin(\"{}\\\\UnDot.dll\")\n", plugins.replace('\\', "\\\\")));
         s.push_str("Undot()\n");
     }
     // Trim：起始帧 + 编码帧数
@@ -183,12 +186,25 @@ pub fn build_script(
     if let Some(sub) = subtitle_path {
         if !sub.is_empty() {
             if !tools_dir.is_empty() {
-                s.push_str(&format!("LoadPlugin(\"{}\\VSFilter.dll\")\n", tools_dir.replace('\\', "\\\\")));
+                s.push_str(&format!("LoadPlugin(\"{}\\\\VSFilter.dll\")\n", tools_dir.replace('\\', "\\\\")));
             }
             s.push_str(&format!("TextSub(\"{}\")\n", sub.replace('"', "")));
         }
     }
     s
+}
+
+/// AVS 脚本落盘：AviSynth 2.6 只接受 ANSI（系统代码页）脚本，UTF-8 会被直接拒绝；
+/// 中文系统按 GBK 编码（ASCII 部分无损）。脚本含 GBK 无法表示的字符时回退 UTF-8
+/// （此时路径若含非 ASCII 则属不可用组合，但不应比旧行为更差）。
+pub fn write_script_ansi(path: &str, script: &str) -> Result<(), String> {
+    let (encoded, _, had_errors) = encoding_rs::GBK.encode(script);
+    let bytes = if had_errors {
+        script.as_bytes().to_vec()
+    } else {
+        encoded.into_owned()
+    };
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -226,6 +242,7 @@ mod tests {
         let f = AvsFilters { undot: true, ..Default::default() };
         let s = build_script("v.mp4", Some("s.ass"), Demuxer::Ffms2, &f, "T:\\", "T:\\avs", "Deblock()", 100, 50, 0, 0);
         assert!(s.contains("FFVideoSource(\"v.mp4\", threads = 1)"));
+        assert!(s.contains("LoadPlugin(\"T:\\\\avs\\\\plugins\\\\UnDot.dll\")"));
         assert!(s.contains("Trim(100, 149)"));
         assert!(s.contains("Undot()"));
         assert!(s.contains("TextSub(\"s.ass\")"));

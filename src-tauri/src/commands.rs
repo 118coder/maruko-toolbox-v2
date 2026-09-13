@@ -387,7 +387,7 @@ fn prepare_video_job(
             job.avs_script.clone()
         };
         avs_path = format!("{}.avs", temp_base);
-        std::fs::write(&avs_path, &script).map_err(|e| format!("写入 AVS 脚本失败：{}", e))?;
+        maruko_core::avs::write_script_ansi(&avs_path, &script).map_err(|e| format!("写入 AVS 脚本失败：{}", e))?;
     }
 
     let ctx = cli::video::VideoCtx {
@@ -699,7 +699,7 @@ fn check_libx264(ffmpeg: &str) -> bool {
 
 #[tauri::command]
 pub fn save_avs(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| format!("保存 AVS 失败：{}", e))
+    maruko_core::avs::write_script_ansi(&path, &content).map_err(|e| format!("保存 AVS 失败：{}", e))
 }
 
 #[derive(Serialize)]
@@ -745,8 +745,8 @@ pub fn avs_preview(state: State<AppState>, mut job: VideoJob) -> AvsPreviewResul
     };
     let avs_path = format!("{}.avs", temp_base);
     let out = format!("{}_preview.mp4", temp_base);
-    if let Err(e) = std::fs::write(&avs_path, &script) {
-        return AvsPreviewResult { ok: false, path: String::new(), error: e.to_string() };
+    if let Err(e) = maruko_core::avs::write_script_ansi(&avs_path, &script) {
+        return AvsPreviewResult { ok: false, path: String::new(), error: e };
     }
     let x264 = PathBuf::from(&tools.tools_dir).join("x264_64-8bit.exe");
     let avs4x26x = PathBuf::from(&tools.tools_dir).join("avs4x26x.exe");
