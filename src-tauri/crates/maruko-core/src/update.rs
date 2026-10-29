@@ -32,7 +32,8 @@ pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// 从 GitHub Release assets 里挑资产：
-/// 更新包 = zip 且名字含 update/更新包；完整版 = zip 且名字含 完整版。
+/// 更新包 = zip 且名字含 update/更新包；完整版 = zip 且名字含 full/完整版
+/// （GitHub 会剥离资产名中的非 ASCII 字符，发布资产用 ASCII 名）。
 pub fn pick_assets(assets: &[serde_json::Value]) -> (Option<UpdateAsset>, Option<UpdateAsset>) {
     let mut update_asset = None;
     let mut full_asset = None;
@@ -52,7 +53,7 @@ pub fn pick_assets(assets: &[serde_json::Value]) -> (Option<UpdateAsset>, Option
         }
         if (lower.contains("update") || name.contains("更新包")) && update_asset.is_none() {
             update_asset = Some(asset);
-        } else if name.contains("完整版") && full_asset.is_none() {
+        } else if (lower.contains("full") || name.contains("完整版")) && full_asset.is_none() {
             full_asset = Some(asset);
         }
     }
@@ -79,17 +80,20 @@ mod tests {
     #[test]
     fn test_pick_assets() {
         let assets = vec![
-            json!({"name": "小丸工具箱V2现代版1.1完整版.zip", "size": 100, "browser_download_url": "https://x/full.zip"}),
+            json!({"name": "MarukoV2-v1.1-full.zip", "size": 100, "browser_download_url": "https://x/full.zip"}),
             json!({"name": "MarukoV2-update.zip", "size": 7, "browser_download_url": "https://x/update.zip"}),
             json!({"name": "checksums.txt", "size": 1, "browser_download_url": "https://x/txt"}),
             json!({"name": "broken.zip", "size": 1, "browser_download_url": ""}),
         ];
         let (upd, full) = pick_assets(&assets);
         assert_eq!(upd.unwrap().name, "MarukoV2-update.zip");
-        assert!(full.unwrap().name.contains("完整版"));
-        // 反向命名也能挑中
-        let assets2 = vec![json!({"name": "工具更新包.zip", "size": 7, "browser_download_url": "https://x/u.zip"})];
+        assert!(full.unwrap().name.contains("full"));
+        // 中文命名（本地文件名风格）也能挑中
+        let assets2 = vec![
+            json!({"name": "工具更新包.zip", "size": 7, "browser_download_url": "https://x/u.zip"}),
+            json!({"name": "小丸工具箱V2现代版1.1完整版.zip", "size": 100, "browser_download_url": "https://x/f.zip"}),
+        ];
         let (upd2, full2) = pick_assets(&assets2);
-        assert!(upd2.is_some() && full2.is_none());
+        assert!(upd2.is_some() && full2.is_some());
     }
 }
