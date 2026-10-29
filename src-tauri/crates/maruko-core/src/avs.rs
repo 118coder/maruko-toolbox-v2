@@ -207,6 +207,12 @@ pub fn write_script_ansi(path: &str, script: &str) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
+/// 通用 ANSI（GBK 优先，无损回退 UTF-8）文本落盘，与 AVS 脚本同策略。
+/// 供更新批处理等含中文路径的场景使用（cmd 默认代码页可解析）。
+pub fn write_text_ansi(path: &str, content: &str) -> Result<(), String> {
+    write_script_ansi(path, content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

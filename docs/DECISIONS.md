@@ -35,6 +35,10 @@
 | D28 | x265 2Pass 首遍注入 `--preset faster` 采集 stats（x264 官方已有首遍自动降速，无需参数）；实测 x265 4.3 跨 preset stats 兼容、二遍输出合法 | 2Pass 总耗时约 -20%，二遍质量由原始速度档决定不受影响；用户 extra 可覆盖 |
 | D29 | MP4Box 维持 2016 版：本轮经代理重试 download.gpac.io / files.gpac.io，TLS 握手仍被掐断（与 2026-09-14 记录一致）；2016 版封装新流已验证可用 | 渠道不可达 + 现状可用；网络可用时按文件名替换 tools\MP4Box.exe 即可，无需改代码 |
 
+| D30 | 自动更新（v1.1）：启动自动检查（可关）+ 帮助页一键「下载并更新」；更新源默认本仓库 GitHub Releases API（update_url 可自定义，兼容旧 {version,url} 协议）；HTTP 直连 → 环境代理 → 本地 7890/7897 逐路回退并记日志；下载轻量更新包（仅 exe+dll）而非 186MB 完整包；自更新批处理等待进程退出后覆盖 exe/dll 并重启 | 目标用户网络环境 GitHub 直连不稳；轻量包 7MB 级体验好；批处理自替换是便携 exe 无安装器场景的标准解 |
+| D31 | 版本比较与资产挑选为 maruko-core::update 纯函数（GUI 测试二进制起不来，单测必须在 core）；"1.1" 与 "1.1.0" 相等、v 前缀忽略、数值段比较 | 架构解耦规则延续；GitHub tag 风格（v1.0/v1.1）与 semver 双兼容 |
+| D32 | 更新批处理按 GBK 落盘（复用 avs::write_text_ansi），cmd 默认代码页可解析中文路径；解压优先系统 bsdtar、回退 PowerShell | 与 AVS 脚本 ANSI 落盘同一坑位同一解法 |
+
 ## 与原版交互细节的忠实度说明
 
 - 起始帧/编码帧数 → AVS `Trim(start, start+N-1)` 实现（与 avs4x26x 管线一致）

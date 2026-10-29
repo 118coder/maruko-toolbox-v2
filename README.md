@@ -5,6 +5,7 @@
 - **界面**：Tauri 2 + WebView2（GPU 合成渲染），布局与原版一致，视觉现代化（扁平、深色模式、高分屏清晰字体）
 - **GPU 压制**：自动探测 NVENC / QSV / AMF 硬件编码器（基于 ffmpeg），与原版 x264/x265 软编码并存于编码器下拉框；NVENC 启用 NVDEC 硬解直通（cuda 帧全程不下 CPU，HEVC 10bit 实测约 +94%、1080p H264 +26%），不支持的源自动回退软解
 - **秒级启动**：工具链深度探测（GPU 试编码等）后台化 + 结果磁盘缓存，主窗口显示不等任何子进程
+- **应用内自动更新**：启动自动检查（可关）+ 一键下载轻量更新包并自动重启替换；更新源为本仓库 GitHub Releases（支持自定义接口与代理回退）
 - **工具链**：直接复用原版小丸工具箱 `tools\` 目录中的 x264 / x265 / ffmpeg / MP4Box / mkvmerge / mkvextract / FLVExtractCL / neroAacEnc / qaac / fdkaac / lame / flac / MediaInfo.dll / AviSynth 全套滤镜
 - **零耦合架构**：前端 ↔ 后端仅通过一条命令 API 通信；命令行参数生成全部为纯函数并有单元测试（70+）
 

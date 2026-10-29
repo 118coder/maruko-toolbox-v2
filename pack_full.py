@@ -12,7 +12,7 @@ shutil.rmtree(r"E:\maruko-build\package_full", ignore_errors=True)
 
 print("② 复制应用三件套...")
 os.makedirs(STAGE, exist_ok=True)
-shutil.copy2(APP, os.path.join(STAGE, "小丸工具箱V2现代版1.0.exe"))
+shutil.copy2(APP, os.path.join(STAGE, "小丸工具箱V2现代版1.1.exe"))
 shutil.copy2(WV, os.path.join(STAGE, "WebView2Loader.dll"))
 
 print("③ 复制现代化工具链 tools\\（约 300MB，约需 1 分钟）...")
@@ -35,11 +35,11 @@ for junk in ("logs", "temp"):
 io.open(os.path.join(tools, "toolchain_ver.txt"), "w", encoding="utf-8").write("2026-09-14")
 
 print("⑥ 写使用说明...")
-txt = """小丸工具箱V2现代版1.0 · 完整版
+txt = """小丸工具箱V2现代版1.1 · 完整版
 ================================
 
 【解压即用 · 零依赖】
-把整个文件夹解压到任意位置，双击「小丸工具箱V2现代版1.0.exe」运行。
+把整个文件夹解压到任意位置，双击「小丸工具箱V2现代版1.1.exe」运行。
 工具链已全部内置在 tools\\ 文件夹，无需安装原版小丸或任何其他软件。
 
 【唯一系统要求】
@@ -73,8 +73,8 @@ AviSynth 滤镜等部分组件来自用户自行安装的原版小丸工具箱�
 """
 io.open(os.path.join(STAGE, "使用说明.txt"), "w", encoding="utf-8-sig").write(txt)
 
-print("⑦ 压缩 zip（约需 1-2 分钟）...")
-zf_path = r"E:\网页小工具\小丸新版本\小丸工具箱V2现代版1.0完整版.zip"
+print("⑦ 压缩完整版 zip（约需 1-2 分钟）...")
+zf_path = r"E:\网页小工具\小丸新版本\小丸工具箱V2现代版1.1完整版.zip"
 if os.path.isfile(zf_path):
     os.remove(zf_path)
 with zipfile.ZipFile(zf_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -85,4 +85,19 @@ with zipfile.ZipFile(zf_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             zf.write(full, rel)
 
 size = os.path.getsize(zf_path) / 1024 / 1024
-print(f"⑧ 完成：{zf_path}  ({size:.1f} MB)")
+print(f"⑧ 完整版完成：{zf_path}  ({size:.1f} MB)")
+
+print("⑨ 打轻量更新包（exe + WebView2Loader.dll，供应用内一键更新）...")
+UPD_STAGE = r"E:\maruko-build\package_full\update_pkg"
+shutil.rmtree(UPD_STAGE, ignore_errors=True)
+os.makedirs(UPD_STAGE, exist_ok=True)
+shutil.copy2(APP, os.path.join(UPD_STAGE, "小丸工具箱V2现代版1.1.exe"))
+shutil.copy2(WV, os.path.join(UPD_STAGE, "WebView2Loader.dll"))
+upd_path = r"E:\网页小工具\小丸新版本\MarukoV2-update.zip"
+if os.path.isfile(upd_path):
+    os.remove(upd_path)
+with zipfile.ZipFile(upd_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    for f in os.listdir(UPD_STAGE):
+        zf.write(os.path.join(UPD_STAGE, f), f)
+usize = os.path.getsize(upd_path) / 1024 / 1024
+print(f"⑩ 更新包完成：{upd_path}  ({usize:.1f} MB)")

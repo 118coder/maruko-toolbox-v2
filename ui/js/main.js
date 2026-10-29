@@ -99,6 +99,15 @@ async function boot() {
   // 告诉后端 UI 就绪（关闭启动画面、显示主窗）
   await invoke('ui_ready');
 
+  // 自动检查更新（设置页可关）：发现新版本时轻提示，不阻塞任何操作
+  if (state.settings?.checkUpdate) {
+    invoke('check_update').then((r) => {
+      if (r?.ok && r.msg.includes('新版本')) {
+        toast(`${r.msg}，可到「帮助」页一键更新`, 'ok');
+      }
+    }).catch(() => {});
+  }
+
   console.log('[maruko-v2] 就绪');
 }
 

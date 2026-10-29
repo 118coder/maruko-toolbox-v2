@@ -16,3 +16,4 @@ pub mod locator;
 pub mod logs;
 pub mod mediainfo;
 pub mod settings;
+pub mod update;

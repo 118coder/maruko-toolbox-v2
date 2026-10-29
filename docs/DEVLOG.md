@@ -173,3 +173,22 @@ x265 无 x264 那样的首遍自动降速机制。实测 x265 4.3：pass1 `--pre
 交接文档遗留项，本轮用代理 7897 重试 download.gpac.io / files.gpac.io：CONNECT 通但 TLS 握手仍被掐断（schannel: failed to receive handshake）。2016 版 MP4Box 封装新流已验证可用，维持现状；后续网络环境可用时从 https://download.gpac.io/gpac/release/ 取新版替换 tools\MP4Box.exe 即可（程序按文件名调用）。
 
 **回归**：72 单测全过（+6：硬解 argv、resize scale_cuda、字幕降级、准入门控、x265 首遍、回退集成）。
+
+## 2026-10-30（下午）
+
+### v1.1 发布：应用内自动更新系统
+
+**功能链路**：启动自动检查（设置页「检查更新」开关控制，默认开）→ 发现新版本轻提示 → 帮助页「检查更新」看详情 → 「下载并更新」一键完成：流式下载轻量更新包（仅 exe+dll，7MB 级，带进度条）→ 解压 → 写自更新批处理（等本进程退出 → 覆盖 exe/WebView2Loader.dll → 重启 → 清理临时文件与自删）→ 程序自动重启完成升级。
+
+**实现要点**：
+1. **更新源**：默认 GitHub Releases API（`api.github.com/repos/118coder/maruko-toolbox-v2/releases/latest`），设置页 update_url 可自定义；旧简易协议 `{version, url}` 兼容保留
+2. **HTTP 代理回退链**：直连 → 环境代理（HTTPS_PROXY 等）→ 本地常见代理端口 127.0.0.1:7890/7897，逐路尝试，成功路径记日志（目标用户网络环境下 GitHub 直连不稳）
+3. **版本比较**（maruko-core::update 纯函数 + 单测）：语义化比较，`1.1` ≡ `1.1.0`，v 前缀与非数字尾巴忽略，数值段比较（1.10 > 1.9）
+4. **资产挑选**：`MarukoV2-update.zip`（更新包）与 `*完整版.zip`（完整包）按名字识别，供「下载并更新」与手动下载两种路径
+5. **批处理落盘**：中文路径在 cmd 默认代码页（GBK）下可解析——复用 `avs::write_text_ansi`（GBK 优先、无损回退）
+6. **解压**：优先系统自带 bsdtar（支持 zip），失败回退 PowerShell Expand-Archive
+7. 版本号 1.0 → **1.1** 全量同步：tauri.conf、窗口标题、启动画面、关于页、VERSION 常量、pack_full.py 产物名
+
+**发布包（双资产）**：完整版 `小丸工具箱V2现代版1.1完整版.zip`（186MB，零依赖解压即用）+ 更新包 `MarukoV2-update.zip`（约 7MB，应用内一键更新用）。pack_full.py 一次产出两个。
+
+**发布链路**：分支推送 → PR → 合并 → tag v1.1 → GitHub Release 双资产上传（PAT 经 `git credential fill` 提取；大文件经代理上传）。
