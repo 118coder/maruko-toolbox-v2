@@ -32,6 +32,7 @@ pub fn build_mux_mp4(
             output: output.to_string(),
             steps: vec![s],
             shutdown_after: false,
+        fallback: None,
         });
     }
     let mut args: Vec<String> = vec!["-add".into(), video.to_string()];
@@ -53,6 +54,7 @@ pub fn build_mux_mp4(
         output: output.to_string(),
         steps: vec![Step::new("封装 MP4 (MP4Box)", &mp4box_path(tools_dir), args)],
         shutdown_after: false,
+    fallback: None,
     })
 }
 
@@ -88,6 +90,7 @@ pub fn build_mux_mkv(
         output: output.to_string(),
         steps: vec![step],
         shutdown_after: false,
+    fallback: None,
     })
 }
 
@@ -116,6 +119,7 @@ pub fn build_convert(
         output: output.to_string(),
         steps: vec![s],
         shutdown_after: false,
+    fallback: None,
     })
 }
 

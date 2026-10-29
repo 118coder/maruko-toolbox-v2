@@ -112,3 +112,83 @@
 1. avs.rs：Undot() 前显式 LoadPlugin UnDot.dll（顺带统一四处 LoadPlugin 的反斜杠转义为双反斜杠）
 2. avs.rs 新增 write_script_ansi()：脚本按 GBK 编码落盘（ASCII 无损；含 GBK 不可表示字符时回退 UTF-8 不劣化）；commands.rs 三处写 AVS（压制/保存/预览）全部改走它
 验证：GBK 脚本 + 中文路径 + UnDot/LSMASH 显式加载 + Undot()/Tweak() 实测编码通过（hevc yuv420p）；63 单测全过。修复后中文目录解压、中文视频名、中文字幕路径的 AVS 管线全部可用。
+
+## 2026-10-30
+
+### 查漏补缺与回归
+- 65 个单测全过（比上轮多 2 个）、全部 ui/js 文件 node --check 通过
+- **环境坑（新）**：全局 `CARGO_HOME` 被指到中文路径 `D:\缓存\...`，GNU ld 找不到 `-lwindows.0.48.5`（windows_x86_64_gnu 导入库在中文 -L 路径下打不开，与 windres 中文路径同源问题）→ 已把 registry 缓存拷到 `E:\maruko-build\cargo-home`，devbuild.bat 固化 `set CARGO_HOME=E:\maruko-build\cargo-home`，换机构建前必读
+
+### 性能优化轮：启动「秒开」+ 渲染提速（10 项，9 项落地）
+
+启动链路旧瓶颈：`get_tools_info` 串行跑 9 个 GPU 试编码（约 4.5s）+ 2 次 `ffmpeg -encoders/-filters`，全部发生在 `ui_ready` 之前 → 主窗被启动画面挡住 5 秒以上。
+
+| # | 优化 | 实现 | 效果（实测） |
+| --- | --- | --- | --- |
+| 1 | GPU 探测并行化 | gpu.rs `detect_parallel()`：9 个候选并发试编码 | 4.5s → 0.5s（日志同秒完成） |
+| 2 | GPU 探测磁盘缓存 | `gpu_cache.json`（exe 旁，回退 %APPDATA%），按 ffmpeg 路径+mtime 校验 | 二次启动零试编码（日志「命中磁盘缓存」） |
+| 3 | 工具信息后台化 | `get_tools_info` 只返回轻量快照（毫秒级）；GPU/专业编码器/特性检测移入后台线程，完成后发 `tools://ready` 事件；前端 main.js 先注册监听再触发探测（防丢事件），到达后合并 + 刷新编码器下拉 | 主窗显示不等任何子进程 = **秒开** |
+| 4 | 进度日志节流 | jobs.rs 两处 stderr 读取循环：进度行（\r 刷新）Log 事件节流 400ms/条（≥100% 收尾行强制放行），普通输出行全量保留 | 编码时 IPC/DOM/日志文件写入降 ~250 倍 |
+| 5 | 进度渲染 rAF 合并 | jobs.js：Progress 事件只更新内存，DOM 写入经 requestAnimationFrame 每帧至多一次 | 高 fps 编码时 UI 顺滑 |
+| 6 | 2Pass 首遍提速 | video.rs 去掉 x264 `--slow-firstpass`（x264 官方默认即快速首遍，与 MeGUI/HandBrake 一致；质量由二遍决定不受影响）| 2Pass 首遍约 -25% |
+| 7 | NVENC 智能默认 | video.rs `encoder_option_args`：面板四项（preset/multipass/spatial-aq/lookahead）全空时注入 `-tune hq -rc-lookahead 20 -spatial-aq 1`；任一有值则完全尊重面板 | 硬编画质免费提升（速度代价 ~1-2%） |
+| 8 | libx264 探测缓存 | commands.rs `LIBX264_CACHE`（OnceLock，ffmpeg 路径为键）；一图流/旋转不再每次 spawn `-encoders` | 微交互提速 |
+| 9 | Release LTO | Cargo.toml：opt-level=3 + lto="fat" + codegen-units=1 | 二进制更小、启动更快 |
+| 10 | GPU 解码直通管线（scale_cuda/hwupload_cuda 全 GPU 链） | **评估后不做**：与 subtitles 滤镜（CPU）冲突、驱动兼容风险高，违背「最稳定」原则；记录为后续方向 | - |
+
+**顺带修复（存量 bug）**：`AppState.tools` 从 OnceLock 改 `Mutex<Tools>`——旧版设置页改工具链目录后，任务提交仍用启动时的旧路径（get_tools_info 重新 resolve 只骗过了 UI）。现在 save_settings 检测 tools_dir/ffmpeg_path/enable_x265 变更即同步重解析 + 触发后台深度刷新。
+
+**冒烟实测**（E:\maruko-build\debug\maruko-v2.exe + logs/maruko-v2.log）：
+- 首次启动：06:15:05 启动 → 06:15:07 九项 GPU 探测同秒完成（NVENC 2 项 OK，其余正确判不可用）→ tools://ready 推送
+- 二次启动：06:15:40 启动 → 06:15:41 命中磁盘缓存 + 推送完成，全程 <1s
+- 66 单测全过（新增 NVENC 默认注入测试、--slow-firstpass 移除测试改名）
+
+### 第二轮：渲染速度深度优化（数据驱动，2026-10-30）
+
+用户要求"一口气做完"。三项实验先行，数据决定取舍：
+
+**实验 1：GPU 硬解直通管线（原 #10，实测后落地）**
+
+ffmpeg 7.1 + NVENC 实测（testsrc2 素材，speed= 倍速）：
+
+| 场景 | 软解→NVENC | 硬解(cuda)→NVENC | 提升 |
+| --- | --- | --- | --- |
+| 1080p H.264 | 9.75x | 12.3x | +26% |
+| 1080p HEVC 10bit | 5.52x | 10.7x | **+94%** |
+| 4K H.264 | 3.31x | 3.39x | +2%（NVENC 本身成瓶颈） |
+
+兼容性逐项验证 ✓：trim/setpts（cuda 帧域可用）、scale_cuda=W:H:format=nv12、scale_cuda=format=nv12 等分、p010 直通 hevc_nvenc、10bit 源降 8bit、faststart 完整 mp4 输出（HEVC Main yuv420p，与软解路径输出语义一致）。
+
+落地设计（保稳定）：
+- 准入纯函数 `hwaccel_eligible`：仅 `*_nvenc` 编码器 + 源 vcodec ∈ {h264, hevc, av1}（NVDEC 可解门控）+ 无字幕烧录（subtitles 滤镜需 CPU 帧域；QSV/AMF 独立 hwaccel 管线未验证不启用）
+- argv：`-hwaccel cuda -hwaccel_output_format cuda` 前置；vf 链 scale→scale_cuda（resize 带尺寸+格式，keep_res 时等分 `scale_cuda=format=nv12`），统一归一 nv12 8bit（对齐软解 format=yuv420p 的输出位深语义，规避 Hi10P→p010 进 h264_nvenc 必败）
+- **Plan.fallback 回退机制**（cli::Plan 新字段 + jobs.rs worker）：主计划失败且非用户取消时自动改跑同参软解计划，日志记录、临时文件按"尝试链"清理；无预检延迟，最坏情况多花几秒重试。配集成单测（主计划必败 → 回退 → done 断言）
+
+**实验 2：x265 2Pass 快速首遍（实测后落地）**
+
+x265 无 x264 那样的首遍自动降速机制。实测 x265 4.3：pass1 `--preset faster`（174fps）+ pass2 medium → exit 0、输出合法 HEVC（ffprobe 复核 codec/dim 正常）。encode_args 在 2pass pass1（非 x264）注入 `--preset faster`（extra 可覆盖），2Pass 总耗时约 -20%。
+
+**实验 3：MP4Box 现代化（仍不可达，如实保留）**
+
+交接文档遗留项，本轮用代理 7897 重试 download.gpac.io / files.gpac.io：CONNECT 通但 TLS 握手仍被掐断（schannel: failed to receive handshake）。2016 版 MP4Box 封装新流已验证可用，维持现状；后续网络环境可用时从 https://download.gpac.io/gpac/release/ 取新版替换 tools\MP4Box.exe 即可（程序按文件名调用）。
+
+**回归**：72 单测全过（+6：硬解 argv、resize scale_cuda、字幕降级、准入门控、x265 首遍、回退集成）。
+
+## 2026-10-30（下午）
+
+### v1.1 发布：应用内自动更新系统
+
+**功能链路**：启动自动检查（设置页「检查更新」开关控制，默认开）→ 发现新版本轻提示 → 帮助页「检查更新」看详情 → 「下载并更新」一键完成：流式下载轻量更新包（仅 exe+dll，7MB 级，带进度条）→ 解压 → 写自更新批处理（等本进程退出 → 覆盖 exe/WebView2Loader.dll → 重启 → 清理临时文件与自删）→ 程序自动重启完成升级。
+
+**实现要点**：
+1. **更新源**：默认 GitHub Releases API（`api.github.com/repos/118coder/maruko-toolbox-v2/releases/latest`），设置页 update_url 可自定义；旧简易协议 `{version, url}` 兼容保留
+2. **HTTP 代理回退链**：直连 → 环境代理（HTTPS_PROXY 等）→ 本地常见代理端口 127.0.0.1:7890/7897，逐路尝试，成功路径记日志（目标用户网络环境下 GitHub 直连不稳）
+3. **版本比较**（maruko-core::update 纯函数 + 单测）：语义化比较，`1.1` ≡ `1.1.0`，v 前缀与非数字尾巴忽略，数值段比较（1.10 > 1.9）
+4. **资产挑选**：`MarukoV2-update.zip`（更新包）与 `*完整版.zip`（完整包）按名字识别，供「下载并更新」与手动下载两种路径
+5. **批处理落盘**：中文路径在 cmd 默认代码页（GBK）下可解析——复用 `avs::write_text_ansi`（GBK 优先、无损回退）
+6. **解压**：优先系统自带 bsdtar（支持 zip），失败回退 PowerShell Expand-Archive
+7. 版本号 1.0 → **1.1** 全量同步：tauri.conf、窗口标题、启动画面、关于页、VERSION 常量、pack_full.py 产物名
+
+**发布包（双资产）**：完整版 `小丸工具箱V2现代版1.1完整版.zip`（186MB，零依赖解压即用）+ 更新包 `MarukoV2-update.zip`（约 7MB，应用内一键更新用）。pack_full.py 一次产出两个。
+
+**发布链路**：分支推送 → PR → 合并 → tag v1.1 → GitHub Release 双资产上传（PAT 经 `git credential fill` 提取；大文件经代理上传）。

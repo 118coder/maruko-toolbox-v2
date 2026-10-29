@@ -2,7 +2,7 @@
 
 import { invoke, listen } from './bridge.js';
 import { $, $$, initNumBoxes, setFieldFromDrop, toast } from './components.js';
-import { state, loadSettings, loadTools, saveSettings } from './state.js';
+import { state, loadSettings, loadTools, saveSettings, mergeToolsReady } from './state.js';
 import { applyLanguage } from './i18n.js';
 import { initJobsUI } from './jobs.js';
 import * as video from './tabs/video.js';
@@ -46,6 +46,12 @@ async function boot() {
   });
   window.addEventListener('unhandledrejection', (ev) => {
     invoke('log_frontend', { message: `未处理的Promise: ${ev.reason}` }).catch(() => {});
+  });
+  // 工具链深度探测（GPU 试编码等）在后台完成：先注册监听再触发探测，防事件丢失
+  listen('tools://ready', (e) => {
+    mergeToolsReady(e.payload);
+    if ($('#vEncoder')) video.refreshEncoders();
+    console.log('[maruko-v2] 工具链深度探测就绪');
   });
   await loadSettings();
   applyLanguage(state.settings.language);
@@ -92,6 +98,15 @@ async function boot() {
 
   // 告诉后端 UI 就绪（关闭启动画面、显示主窗）
   await invoke('ui_ready');
+
+  // 自动检查更新（设置页可关）：发现新版本时轻提示，不阻塞任何操作
+  if (state.settings?.checkUpdate) {
+    invoke('check_update').then((r) => {
+      if (r?.ok && r.msg.includes('新版本')) {
+        toast(`${r.msg}，可到「帮助」页一键更新`, 'ok');
+      }
+    }).catch(() => {});
+  }
 
   console.log('[maruko-v2] 就绪');
 }

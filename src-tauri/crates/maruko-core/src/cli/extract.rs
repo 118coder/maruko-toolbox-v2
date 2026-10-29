@@ -31,7 +31,7 @@ pub fn build_common_video(input: &str, out: &str, codec: &str, ffmpeg: &str) -> 
     args.push(out.to_string());
     let mut s = Step::new("抽取视频", ffmpeg, args);
     s.parser = Parser::Ffmpeg { duration: 0.0 };
-    Ok(Plan { title: "抽取视频".into(), output: out.to_string(), steps: vec![s], shutdown_after: false })
+    Ok(Plan { title: "抽取视频".into(), output: out.to_string(), steps: vec![s], shutdown_after: false, fallback: None })
 }
 
 pub fn build_common_audio(input: &str, out: &str, index: u32, ffmpeg: &str) -> Result<Plan, String> {
@@ -43,7 +43,7 @@ pub fn build_common_audio(input: &str, out: &str, index: u32, ffmpeg: &str) -> R
     ];
     let mut s = Step::new("抽取音频", ffmpeg, args);
     s.parser = Parser::Ffmpeg { duration: 0.0 };
-    Ok(Plan { title: "抽取音频".into(), output: out.to_string(), steps: vec![s], shutdown_after: false })
+    Ok(Plan { title: "抽取音频".into(), output: out.to_string(), steps: vec![s], shutdown_after: false, fallback: None })
 }
 
 /// FLV 抽取（FLVExtractCL 输出到源文件目录，与原版一致）。
@@ -60,6 +60,7 @@ pub fn build_flv(input: &str, kind: &str, tools_dir: &str) -> Result<Plan, Strin
         output: String::new(),
         steps: vec![Step::new("FLVExtractCL", &exe, args)],
         shutdown_after: false,
+    fallback: None,
     })
 }
 
@@ -72,7 +73,7 @@ pub fn build_mkv_track(input: &str, track: u32, out: &str, tools_dir: &str) -> R
     ];
     let mut s = Step::new("抽取MKV轨道", &mkvextract_path(tools_dir), args);
     s.env_path.push(tools_dir.to_string());
-    Ok(Plan { title: format!("抽取MKV轨道 {}", track), output: out.to_string(), steps: vec![s], shutdown_after: false })
+    Ok(Plan { title: format!("抽取MKV轨道 {}", track), output: out.to_string(), steps: vec![s], shutdown_after: false, fallback: None })
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use crate::locator::GpuEntry;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -63,6 +64,7 @@ fn probe(ffmpeg: &Path, id: &str) -> bool {
 }
 
 /// 带缓存的探测器（ffmpeg 路径变化时失效）。
+/// 两级缓存：内存（进程内）→ 磁盘（跨启动，按 ffmpeg 路径 + mtime 校验）。
 pub struct GpuDetector {
     cache: Mutex<Option<(String, Vec<GpuEntry>)>>,
 }
@@ -81,20 +83,100 @@ impl GpuDetector {
                 return entries;
             }
         }
-        let ff = Path::new(ffmpeg);
-        let mut entries = Vec::new();
-        for c in CANDIDATES {
-            let ok = probe(ff, c.id);
-            crate::logs::write(&format!("GPU 探测 {} -> {}", c.id, if ok { "OK" } else { "不可用" }));
-            entries.push(GpuEntry {
-                id: c.id.to_string(),
-                label: c.label.to_string(),
-                api: c.api.to_string(),
-                ok,
-            });
-        }
+        let entries = match read_disk_cache(ffmpeg) {
+            Some(cached) => {
+                crate::logs::write("GPU 探测命中磁盘缓存（ffmpeg 未变化，跳过试编码）");
+                cached
+            }
+            None => {
+                let e = detect_parallel(Path::new(ffmpeg));
+                write_disk_cache(ffmpeg, &e);
+                e
+            }
+        };
         *self.cache.lock().unwrap() = Some((ffmpeg.to_string(), entries.clone()));
         entries
+    }
+}
+
+/// 并发探测全部候选（9 个 ffmpeg 进程同时起）。
+/// 串行逐个试编码约 4.5s，是启动慢的主因；并发后 ≈ 最慢一个的耗时（约 0.5s）。
+fn detect_parallel(ff: &Path) -> Vec<GpuEntry> {
+    let handles: Vec<_> = CANDIDATES
+        .iter()
+        .map(|c| {
+            let ff = ff.to_path_buf();
+            std::thread::spawn(move || {
+                let ok = probe(&ff, c.id);
+                (c.id.to_string(), c.label.to_string(), c.api.to_string(), ok)
+            })
+        })
+        .collect();
+    let mut entries = Vec::new();
+    for h in handles {
+        if let Ok((id, label, api, ok)) = h.join() {
+            crate::logs::write(&format!("GPU 探测 {} -> {}", id, if ok { "OK" } else { "不可用" }));
+            entries.push(GpuEntry { id, label, api, ok });
+        }
+    }
+    entries
+}
+
+#[derive(Serialize, Deserialize)]
+struct GpuCacheFile {
+    ffmpeg: String,
+    mtime: u64,
+    entries: Vec<GpuEntry>,
+}
+
+fn appdata_cache_path() -> Option<PathBuf> {
+    let p = std::env::var("APPDATA").ok().map(|d| PathBuf::from(d).join("MarukoV2").join("gpu_cache.json"))?;
+    let _ = std::fs::create_dir_all(p.parent()?);
+    Some(p)
+}
+
+fn exe_cache_path() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("gpu_cache.json")))
+}
+
+/// mtime 粒度 2 秒（FAT32 为 2s，NTFS 为 100ns；用户换 ffmpeg 是低频事件，2s 足够）
+fn ffmpeg_mtime(ffmpeg: &str) -> Option<u64> {
+    let m = std::fs::metadata(ffmpeg).ok()?.modified().ok()?;
+    m.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() / 2 * 2)
+}
+
+fn read_disk_cache(ffmpeg: &str) -> Option<Vec<GpuEntry>> {
+    let mut txt = None;
+    if let Some(p) = exe_cache_path() {
+        txt = std::fs::read_to_string(p).ok();
+    }
+    if txt.is_none() {
+        txt = appdata_cache_path().and_then(|p| std::fs::read_to_string(p).ok());
+    }
+    let v: GpuCacheFile = serde_json::from_str(txt.as_deref()?).ok()?;
+    if v.ffmpeg != ffmpeg || Some(v.mtime) != ffmpeg_mtime(ffmpeg) {
+        return None;
+    }
+    Some(v.entries)
+}
+
+fn write_disk_cache(ffmpeg: &str, entries: &[GpuEntry]) {
+    let mtime = match ffmpeg_mtime(ffmpeg) {
+        Some(m) => m,
+        None => return,
+    };
+    let v = match serde_json::to_string(&GpuCacheFile { ffmpeg: ffmpeg.to_string(), mtime, entries: entries.to_vec() }) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    // exe 旁优先（便携习惯）；失败（如 Program Files 权限）回退 %APPDATA%
+    if let Some(p) = exe_cache_path() {
+        if std::fs::write(&p, &v).is_ok() {
+            return;
+        }
+    }
+    if let Some(p) = appdata_cache_path() {
+        let _ = std::fs::write(p, &v);
     }
 }
 

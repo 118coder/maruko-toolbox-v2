@@ -14,7 +14,9 @@
 | `pick_file` | `title, filters[{name,exts}], save?` | `string?` | 系统文件对话框（单选） |
 | `pick_folder` | `title` | `string?` | 文件夹对话框 |
 | `open_path` | `path, reveal?` | null | 打开文件/目录（reveal=资源管理器定位） |
-| `check_update` | – | `{ok, current, latest, msg}` | 检查更新（可配置 URL，失败返回 ok:false） |
+| `check_update` | – | `{ok, current, latest, msg, updateAsset?, fullAsset?, htmlUrl}` | 检查更新：默认 GitHub Releases API（update_url 可自定义，兼容旧 {version,url} 协议），代理回退链 直连→环境代理→7890/7897 |
+| `download_update` | `url, name` | `string`（zip 落盘路径） | 流式下载更新包，事件 `update://progress`（received/total/pct/phase）；`update_cancel` 可中断 |
+| `apply_update` | `zipPath` | null（成功后程序退出自动重启） | 解压 → 写自更新批处理（等进程退出→覆盖 exe/dll→重启→清理自删）→ 退出 |
 | `get_logs` | – | `string[]` | 读取日志（最近的在后） |
 | `open_logs_dir` | – | null | 打开日志目录 |
 | `delete_logs` | – | null | 删除全部日志 |

@@ -9,13 +9,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter as _, Manager, State, Theme};
 
-pub const VERSION: &str = "1.0.0";
+pub const VERSION: &str = "1.1.0";
+/// 默认更新接口：本仓库 GitHub Releases（设置页可自定义，兼容旧 {version,url} 协议）
+pub const DEFAULT_UPDATE_API: &str = "https://api.github.com/repos/118coder/maruko-toolbox-v2/releases/latest";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
-    pub tools: OnceLock<Tools>,
-    pub gpu: GpuDetector,
+    /// 工具链快照：设置页改目录/ffmpeg 后由 save_settings 同步重解析
+    pub tools: Mutex<Tools>,
+    pub gpu: Arc<GpuDetector>,
     pub jobs: JobManager,
 }
 
@@ -25,14 +28,14 @@ impl AppState {
         let tools = locator::resolve(&s);
         AppState {
             settings: Mutex::new(s),
-            tools: OnceLock::from(tools),
-            gpu: GpuDetector::new(),
+            tools: Mutex::new(tools),
+            gpu: Arc::new(GpuDetector::new()),
             jobs: JobManager::new(emitter),
         }
     }
 
-    pub fn tools(&self) -> &Tools {
-        self.tools.get().unwrap()
+    pub fn tools(&self) -> Tools {
+        self.tools.lock().unwrap().clone()
     }
 }
 
@@ -81,13 +84,26 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, app: AppHandle, new_settings: Settings) -> Result<Settings, String> {
-    let mut st = state.settings.lock().unwrap();
-    *st = new_settings;
-    settings::save(&st)?;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_theme(Some(if st.dark { Theme::Dark } else { Theme::Light }));
+    let tools_changed;
+    {
+        let mut st = state.settings.lock().unwrap();
+        tools_changed = st.tools_dir != new_settings.tools_dir
+            || st.ffmpeg_path != new_settings.ffmpeg_path
+            || st.enable_x265 != new_settings.enable_x265;
+        *st = new_settings;
+        settings::save(&st)?;
     }
-    Ok(st.clone())
+    if tools_changed {
+        // 同步重解析轻量部分（毫秒级），GPU 等深度探测交给后台
+        let s = state.settings.lock().unwrap().clone();
+        *state.tools.lock().unwrap() = locator::resolve(&s);
+        spawn_tools_refresh(app.clone(), &state);
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let dark = state.settings.lock().unwrap().dark;
+        let _ = w.set_theme(Some(if dark { Theme::Dark } else { Theme::Light }));
+    }
+    Ok(state.settings.lock().unwrap().clone())
 }
 
 #[tauri::command]
@@ -99,59 +115,118 @@ pub fn reset_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-pub fn get_tools_info(state: State<AppState>) -> Tools {
-    let s = state.settings.lock().unwrap().clone();
-    let mut tools = locator::resolve(&s);
-    tools.gpu_info = state.gpu.detect(&tools.ffmpeg);
-    // Voukoder 风格专业编码器：解析 ffmpeg -encoders 过滤精选清单
-    if !tools.ffmpeg.is_empty() {
-        if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
-            let txt = String::from_utf8_lossy(&o.stdout);
-            let curated: &[(&str, &str)] = &[
-                ("libx265", "现代版 x265（Voukoder 风格预设）"),
-                ("libx264", "现代版 x264（Voukoder 风格预设）"),
-                ("prores_ks", "ProRes 422（专业剪辑）"),
-                ("cfhd", "CineForm（专业剪辑）"),
-                ("ffv1", "FFV1（无损归档）"),
-                ("utvideo", "UtVideo（无损）"),
-                ("libvpx-vp9", "VP9（webm）"),
-            ];
-            for (id, label) in curated {
-                if txt.contains(&format!(" {}", id)) {
-                    tools.ffmpeg_encoders.push(locator::EncoderEntry {
-                        id: id.to_string(),
-                        label: label.to_string(),
-                        gpu: false,
-                    });
-                }
-            }
-        }
-    }
+pub fn get_tools_info(app: AppHandle, state: State<AppState>) -> Tools {
+    // 立即返回轻量快照（纯文件系统检查，毫秒级），主窗不等待任何子进程。
+    // GPU 试编码 / 专业编码器清单 / 特性检测由后台完成并经 tools://ready 推送。
+    let tools = state.tools();
+    spawn_tools_refresh(app, &state);
     tools
 }
 
-#[derive(Serialize)]
+/// 深度探测去重标志
+static TOOLS_REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 后台深度探测：GPU 试编码（并行 + 磁盘缓存）→ ffmpeg 专业编码器清单 → libx264/subtitles 特性。
+/// 完成后更新主快照并发 tools://ready 事件；不阻塞任何命令。
+fn spawn_tools_refresh(app: AppHandle, state: &State<AppState>) {
+    use std::sync::atomic::Ordering;
+    if TOOLS_REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let gpu = state.gpu.clone();
+    let settings = state.settings.lock().unwrap().clone();
+    std::thread::spawn(move || {
+        let mut tools = locator::resolve(&settings);
+        tools.gpu_info = gpu.detect(&tools.ffmpeg);
+        // Voukoder 风格专业编码器：解析 ffmpeg -encoders 过滤精选清单
+        if !tools.ffmpeg.is_empty() {
+            if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
+                let txt = String::from_utf8_lossy(&o.stdout);
+                let curated: &[(&str, &str)] = &[
+                    ("libx265", "现代版 x265（Voukoder 风格预设）"),
+                    ("libx264", "现代版 x264（Voukoder 风格预设）"),
+                    ("prores_ks", "ProRes 422（专业剪辑）"),
+                    ("cfhd", "CineForm（专业剪辑）"),
+                    ("ffv1", "FFV1（无损归档）"),
+                    ("utvideo", "UtVideo（无损）"),
+                    ("libvpx-vp9", "VP9（webm）"),
+                ];
+                for (id, label) in curated {
+                    if txt.contains(&format!(" {}", id)) {
+                        tools.ffmpeg_encoders.push(locator::EncoderEntry {
+                            id: id.to_string(),
+                            label: label.to_string(),
+                            gpu: false,
+                        });
+                    }
+                }
+            }
+        }
+        let features = detect_features(&tools.ffmpeg);
+        // 更新主快照后推送
+        if let Some(st) = app.try_state::<AppState>() {
+            *st.tools.lock().unwrap() = tools.clone();
+        }
+        let _ = app.emit("tools://ready", ToolsReadyPayload { tools, features });
+        maruko_core::logs::write("工具链深度探测完成（tools://ready 已推送）");
+        TOOLS_REFRESHING.store(false, Ordering::SeqCst);
+    });
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ToolsReadyPayload {
+    tools: Tools,
+    features: LibCheck,
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LibCheck {
     pub libx264: bool,
     pub subtitles_filter: bool,
 }
 
-#[tauri::command]
-pub fn check_ffmpeg_features(state: State<AppState>) -> LibCheck {
-    let ff = &state.tools().ffmpeg;
-    if ff.is_empty() {
+/// libx264 探测结果缓存（ffmpeg 路径为键）：一图流/旋转等命令不再反复 spawn -encoders
+static LIBX264_CACHE: OnceLock<Mutex<Option<(String, bool)>>> = OnceLock::new();
+
+fn cached_libx264(ffmpeg: &str) -> bool {
+    if ffmpeg.is_empty() {
+        return false;
+    }
+    let cache = LIBX264_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let g = cache.lock().unwrap();
+        if let Some((path, ok)) = g.as_ref() {
+            if path == ffmpeg {
+                return *ok;
+            }
+        }
+    }
+    let ok = cmd_nowin(ffmpeg)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 ")))
+        .unwrap_or(false);
+    *cache.lock().unwrap() = Some((ffmpeg.to_string(), ok));
+    ok
+}
+
+fn detect_features(ffmpeg: &str) -> LibCheck {
+    if ffmpeg.is_empty() {
         return LibCheck { libx264: false, subtitles_filter: false };
     }
-    let mut libx264 = false;
+    let libx264 = cached_libx264(ffmpeg);
     let mut subtitles_filter = false;
-    if let Ok(o) = cmd_nowin(ff).args(["-hide_banner", "-encoders"]).output() {
-        libx264 = String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 "));
-    }
-    if let Ok(o) = cmd_nowin(ff).args(["-hide_banner", "-filters"]).output() {
+    if let Ok(o) = cmd_nowin(ffmpeg).args(["-hide_banner", "-filters"]).output() {
         subtitles_filter = String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" subtitles "));
     }
     LibCheck { libx264, subtitles_filter }
+}
+
+#[tauri::command]
+pub fn check_ffmpeg_features(state: State<AppState>) -> LibCheck {
+    detect_features(&state.tools().ffmpeg)
 }
 
 // ---------- 对话框 / 打开 ----------
@@ -376,7 +451,7 @@ fn prepare_video_job(
                 demuxer,
                 &filters,
                 &tools.tools_dir,
-                &avs_dir(tools),
+                &avs_dir(&tools),
                 "",
                 job.start_frame,
                 job.frames,
@@ -400,8 +475,24 @@ fn prepare_video_job(
         priority: settings.x264_priority.clone(),
         threads: settings.x264_threads,
         extra: settings.x264_extra.clone(),
+        // NVENC 硬解直通准入：NVDEC 可解 h264/hevc/av1 主流形态；罕见不支持的源
+        // 由 encode 阶段的 Plan.fallback 自动回退软解，无需预检
+        hwaccel: gpu && cli::video::hwaccel_eligible(&job.encoder, &info.vcodec, job.subtitle.is_empty()),
     };
     Ok((ctx, info.has_audio, info.duration))
+}
+
+/// GPU 任务：硬解主计划 + 同参软解回退计划（NVDEC 不支持的源自动重试）。
+fn gpu_plan_with_fallback(job: &VideoJob, ctx: &cli::video::VideoCtx, has_audio: bool, duration: f64) -> Result<cli::Plan, String> {
+    let mut plan = cli::video::build_gpu_plan(job, ctx, has_audio, duration)?;
+    if ctx.hwaccel {
+        let mut sw_ctx = ctx.clone();
+        sw_ctx.hwaccel = false;
+        let mut fb = cli::video::build_gpu_plan(job, &sw_ctx, has_audio, duration)?;
+        fb.title = format!("{}（软解回退）", fb.title);
+        plan.fallback = Some(Box::new(fb));
+    }
+    Ok(plan)
 }
 
 fn file_name(p: &str) -> String {
@@ -416,7 +507,7 @@ pub fn encode_video(state: State<AppState>, mut job: VideoJob) -> Result<u32, St
     let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
     let (ctx, has_audio, duration) = prepare_video_job(&state, &mut job, None)?;
     let plan = if gpu {
-        cli::video::build_gpu_plan(&job, &ctx, has_audio, duration)?
+        gpu_plan_with_fallback(&job, &ctx, has_audio, duration)?
     } else {
         cli::video::build_soft_plan(&job, &ctx)?
     };
@@ -433,7 +524,7 @@ pub fn encode_video_batch(state: State<AppState>, mut jobs: Vec<VideoJob>, subSu
         let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
         let (ctx, has_audio, duration) = prepare_video_job(&state, job, Some(subSuffix.clone()))?;
         let plan = if gpu {
-            cli::video::build_gpu_plan(job, &ctx, has_audio, duration)?
+            gpu_plan_with_fallback(job, &ctx, has_audio, duration)?
         } else {
             cli::video::build_soft_plan(job, &ctx)?
         };
@@ -455,7 +546,8 @@ pub fn encode_audio(state: State<AppState>, job: AudioJob) -> Result<u32, String
         output: job.output.clone(),
         steps,
         shutdown_after: false,
-    };
+        fallback: None,
+        };
     let opts = run_opts(&state.settings.lock().unwrap());
     maruko_core::logs::write(&format!("提交音频任务（{} → {}）", job.input, job.output));
     Ok(state.jobs.submit(plan, opts))
@@ -474,7 +566,8 @@ pub fn encode_audio_batch(state: State<AppState>, jobs: Vec<AudioJob>) -> Result
             output: job.output.clone(),
             steps,
             shutdown_after: false,
-        };
+            fallback: None,
+            };
         ids.push(state.jobs.submit(plan, opts.clone()));
     }
     Ok(ids)
@@ -489,7 +582,7 @@ pub fn merge_audio(state: State<AppState>, inputs: Vec<String>, encoder: String,
     let ext = cli::audio::output_ext(&encoder);
     let out = cli::auto_output(&inputs[0], &format!("merged.{}", ext), "");
     let steps = cli::audio::build_merge_steps(&inputs, &out, &encoder, bitrate, &tools.tools_dir, &tools.ffmpeg)?;
-    let plan = cli::Plan { title: "合并音频".into(), output: out, steps, shutdown_after: false };
+    let plan = cli::Plan { title: "合并音频".into(), output: out, steps, shutdown_after: false, fallback: None };
     let opts = run_opts(&state.settings.lock().unwrap());
     Ok(state.jobs.submit(plan, opts))
 }
@@ -685,14 +778,7 @@ pub fn rotate_video(state: State<AppState>, mut job: clicommon::RotateJob) -> Re
 }
 
 fn check_libx264(ffmpeg: &str) -> bool {
-    if ffmpeg.is_empty() {
-        return false;
-    }
-    cmd_nowin(ffmpeg)
-        .args(["-hide_banner", "-encoders"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 ")))
-        .unwrap_or(false)
+    cached_libx264(ffmpeg)
 }
 
 // ---------- AVS ----------
@@ -803,39 +889,263 @@ pub fn delete_logs() {
     maruko_core::logs::delete_all();
 }
 
-#[derive(Serialize)]
+// ---------- 更新（GitHub Releases 检查 / 下载 / 应用） ----------
+
+use maruko_core::update::UpdateAsset;
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateResult {
     pub ok: bool,
     pub current: String,
     pub latest: String,
     pub msg: String,
+    /// 轻量更新包（仅 exe+dll，供一键更新）
+    pub update_asset: Option<UpdateAsset>,
+    /// 完整版 zip（含工具链）
+    pub full_asset: Option<UpdateAsset>,
+    pub html_url: String,
 }
+
+/// HTTP GET，带代理回退链：直连 → 环境代理 → 本地常见代理端口（7890/7897）。
+/// 目标是 GitHub 在部分网络下直连不稳；哪条路成功记录到日志。
+fn http_get(url: &str, timeout: std::time::Duration) -> Result<ureq::Response, String> {
+    let env_proxy = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()));
+    let mut candidates: Vec<Option<String>> = vec![None, env_proxy.clone()];
+    for p in ["http://127.0.0.1:7890", "http://127.0.0.1:7897"] {
+        if env_proxy.as_deref() != Some(p) {
+            candidates.push(Some(p.into()));
+        }
+    }
+    let mut last_err = String::new();
+    for via in &candidates {
+        let mut builder = ureq::AgentBuilder::new();
+        if let Some(p) = via {
+            match ureq::Proxy::new(p) {
+                Ok(proxy) => builder = builder.proxy(proxy),
+                Err(_) => continue,
+            }
+        }
+        let res = builder
+            .build()
+            .get(url)
+            .timeout(timeout)
+            .set("User-Agent", "maruko-v2-updater")
+            .call();
+        match res {
+            Ok(r) => {
+                maruko_core::logs::write(&format!("更新请求成功（{}）", if via.is_none() { "直连" } else { via.as_deref().unwrap_or("") }));
+                return Ok(r);
+            }
+            Err(e) => {
+                last_err = format!("{}（经 {}）", e, if via.is_none() { "直连" } else { via.as_deref().unwrap_or("") });
+                maruko_core::logs::write(&format!("更新请求失败：{}", last_err));
+            }
+        }
+    }
+    Err(last_err)
+}
+
 
 #[tauri::command]
 pub async fn check_update(state: State<'_, AppState>) -> Result<UpdateResult, String> {
-    let url = state.settings.lock().unwrap().update_url.clone();
+    let mut url = state.settings.lock().unwrap().update_url.clone();
     if url.trim().is_empty() {
-        return Ok(UpdateResult { ok: false, current: VERSION.into(), latest: String::new(), msg: "未配置更新接口".into() });
+        url = DEFAULT_UPDATE_API.into();
     }
-    let res = ureq::get(&url).timeout(std::time::Duration::from_secs(8)).call();
-    match res {
-        Ok(resp) => match resp.into_json::<serde_json::Value>() {
-            Ok(v) => {
-                let latest = v["version"].as_str().unwrap_or("").to_string();
-                let msg = if latest.is_empty() {
-                    "接口返回异常".to_string()
-                } else if latest == VERSION {
-                    "当前已是最新版本".to_string()
-                } else {
-                    format!("发现新版本 {}", latest)
-                };
-                Ok(UpdateResult { ok: true, current: VERSION.into(), latest, msg })
+    let resp = tauri::async_runtime::spawn_blocking(move || http_get(&url, std::time::Duration::from_secs(12)))
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut resp = resp?;
+    let v: serde_json::Value = resp.into_json().map_err(|e| format!("解析失败：{}", e))?;
+
+    let (latest, update_asset, full_asset, html_url);
+    if v["tag_name"].is_string() {
+        // GitHub Releases 协议
+        latest = v["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+        let (u, f) = maruko_core::update::pick_assets(v["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]));
+        update_asset = u;
+        full_asset = f;
+        html_url = v["html_url"].as_str().unwrap_or("").to_string();
+    } else if v["version"].is_string() {
+        // 兼容旧简易协议 {version, url}
+        latest = v["version"].as_str().unwrap_or("").to_string();
+        update_asset = None;
+        full_asset = None;
+        html_url = v["url"].as_str().unwrap_or("").to_string();
+    } else {
+        return Ok(UpdateResult {
+            ok: false, current: VERSION.into(), latest: String::new(),
+            msg: "接口返回异常".into(), update_asset: None, full_asset: None, html_url: String::new(),
+        });
+    }
+
+    let (msg, ok) = match maruko_core::update::version_cmp(&latest, VERSION) {
+        std::cmp::Ordering::Greater => (format!("发现新版本 {}", latest), true),
+        std::cmp::Ordering::Equal => ("当前已是最新版本".to_string(), true),
+        std::cmp::Ordering::Less => (format!("当前版本 {} 较新（接口为 {}）", VERSION, latest), true),
+    };
+    maruko_core::logs::write(&format!("检查更新：当前 {}，接口 {}，{}", VERSION, latest, msg));
+    Ok(UpdateResult { ok, current: VERSION.into(), latest, msg, update_asset, full_asset, html_url })
+}
+
+static UPDATE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn update_cancel() {
+    UPDATE_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn update_work_dir() -> PathBuf {
+    let base = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.join("temp").join("update")))
+        .filter(|p| std::fs::create_dir_all(p).is_ok());
+    base.unwrap_or_else(|| {
+        let p = std::env::temp_dir().join("MarukoV2-update");
+        let _ = std::fs::create_dir_all(&p);
+        p
+    })
+}
+
+/// 流式下载更新包到本地，发 update://progress 事件（received/total/pct）。
+/// 返回 zip 落盘路径。
+#[tauri::command]
+pub async fn download_update(app: AppHandle, url: String, name: String) -> Result<String, String> {
+    use tauri::Emitter as _;
+    UPDATE_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    let dest = update_work_dir().join(if name.is_empty() { "MarukoV2-update.zip".to_string() } else { name });
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // 连接 15s 超时；下载体不限总时长（大文件慢网）
+        let mut resp = http_get(&url, std::time::Duration::from_secs(15))?;
+        let total = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let mut f = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败：{}", e))?;
+        let mut reader = resp.into_reader();
+        let mut buf = [0u8; 64 * 1024];
+        let mut received: u64 = 0;
+        let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        loop {
+            if UPDATE_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+                drop(f);
+                let _ = std::fs::remove_file(&dest);
+                return Err("已取消下载".into());
             }
-            Err(e) => Ok(UpdateResult { ok: false, current: VERSION.into(), latest: String::new(), msg: format!("解析失败：{}", e) }),
-        },
-        Err(e) => Ok(UpdateResult { ok: false, current: VERSION.into(), latest: String::new(), msg: format!("检查失败（离线？）：{}", e) }),
+            let n = reader.read(&mut buf).map_err(|e| format!("下载中断：{}", e))?;
+            if n == 0 {
+                break;
+            }
+            f.write_all(&buf[..n]).map_err(|e| format!("写入失败：{}", e))?;
+            received += n as u64;
+            if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
+                last_emit = std::time::Instant::now();
+                let pct = if total > 0 { received as f64 / total as f64 * 100.0 } else { 0.0 };
+                let _ = app2.emit(
+                    "update://progress",
+                    serde_json::json!({ "received": received, "total": total, "pct": pct, "phase": "download" }),
+                );
+            }
+        }
+        let _ = app2.emit(
+            "update://progress",
+            serde_json::json!({ "received": received, "total": total, "pct": 100.0, "phase": "download" }),
+        );
+        maruko_core::logs::write(&format!("更新包下载完成：{}（{} MB）", dest.display(), received / 1024 / 1024));
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+use std::io::{Read as _, Write as _};
+
+/// 自更新批处理：等本进程退出 → 覆盖 → 重启 → 清理 + 自删（中文路径走 GBK 落盘）
+fn write_batch_ansi(path: &PathBuf, content: &str) -> Result<(), String> {
+    maruko_core::avs::write_text_ansi(&path.to_string_lossy(), content)
+}
+
+/// 应用更新：解压 → 写自更新批处理（等本进程退出 → 覆盖 exe/dll → 重启 → 清理自删）→ 退出本程序。
+#[tauri::command]
+pub async fn apply_update(app: AppHandle, zip_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || apply_update_blocking(&zip_path))
+        .await
+        .map_err(|e| e.to_string())??;
+    maruko_core::logs::write("更新已布置：程序即将重启完成替换");
+    app.exit(0);
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+fn apply_update_blocking(zip_path: &str) -> Result<(), String> {
+    let zip = PathBuf::from(zip_path);
+    if !zip.is_file() {
+        return Err(format!("更新包不存在：{}", zip_path));
     }
+    let extract_dir = zip.parent().unwrap().join(format!("{}_x", zip.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default()));
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir).map_err(|e| format!("创建解压目录失败：{}", e))?;
+
+    // 解压：优先系统自带 bsdtar（支持 zip），失败回退 PowerShell Expand-Archive
+    let tar_ok = cmd_nowin("tar")
+        .args(["-xf", zip_path, "-C"])
+        .arg(&extract_dir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !tar_ok {
+        let ps = format!(
+            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            zip_path,
+            extract_dir.display()
+        );
+        let ps_ok = cmd_nowin("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ps_ok {
+            return Err("解压更新包失败（tar 与 PowerShell 均不可用）".into());
+        }
+    }
+
+    // 找新 exe（zip 内平铺：exe + WebView2Loader.dll）
+    let mut new_exe: Option<PathBuf> = None;
+    let mut new_dll: Option<PathBuf> = None;
+    for e in std::fs::read_dir(&extract_dir).map_err(|e| e.to_string())?.flatten() {
+        let p = e.path();
+        match p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default().as_str() {
+            "exe" if new_exe.is_none() => new_exe = Some(p),
+            "dll" if p.file_name().map(|n| n.eq_ignore_ascii_case("WebView2Loader.dll")).unwrap_or(false) => new_dll = Some(p),
+            _ => {}
+        }
+    }
+    let new_exe = new_exe.ok_or("更新包内未找到 exe")?;
+    let cur_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let cur_pid = std::process::id();
+
+    // 自更新批处理：等本进程退出 → 覆盖 → 重启 → 清理 + 自删
+    let bat = update_work_dir().join("update.bat");
+    let script = format!(
+        "@echo off\r\n:waitloop\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >NUL\r\nif not errorlevel 1 (\r\n  ping -n 2 127.0.0.1 >NUL\r\n  goto waitloop\r\n)\r\ncopy /y \"{new}\" \"{cur}\"\r\n{dll_copy}start \"\" \"{cur}\"\r\nrd /s /q \"{ext}\"\r\ndel \"{zipfile}\"\r\ndel \"%~f0\"\r\n",
+        pid = cur_pid,
+        new = new_exe.display(),
+        cur = cur_exe.display(),
+        dll_copy = new_dll.as_ref().map(|d| format!("copy /y \"{}\" \"{}\"\r\n", d.display(), cur_exe.with_file_name("WebView2Loader.dll").display())).unwrap_or_default(),
+        ext = extract_dir.display(),
+        zipfile = zip.display(),
+    );
+    write_batch_ansi(&bat, &script).map_err(|e| format!("写更新脚本失败：{}", e))?;
+    cmd_nowin("cmd")
+        .args(["/C"])
+        .arg(&bat)
+        .spawn()
+        .map_err(|e| format!("启动更新脚本失败：{}", e))?;
+    Ok(())
 }
 
 // ---------- 事件桥 / 启动 ----------

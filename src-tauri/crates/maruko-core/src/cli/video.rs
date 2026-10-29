@@ -79,6 +79,17 @@ pub struct VideoCtx {
     pub priority: String,
     pub threads: u32,
     pub extra: String,
+    /// GPU 硬解直通（-hwaccel cuda）：仅 NVENC + 无字幕时由命令层置位；
+    /// 硬解失败由 Plan.fallback 自动回退软解
+    pub hwaccel: bool,
+}
+
+/// GPU 硬解直通的准入条件（纯函数）：仅 NVENC 编码器 + 无字幕烧录 + 源编码可被 NVDEC 解。
+/// QSV/AMF 各有独立 hwaccel 管线（vpp_qsv/d3d11va），未经验证不启用。
+pub fn hwaccel_eligible(encoder: &str, src_vcodec: &str, has_subtitle: bool) -> bool {
+    !has_subtitle
+        && encoder.ends_with("_nvenc")
+        && matches!(src_vcodec, "h264" | "hevc" | "av1")
 }
 
 pub fn is_gpu_encoder(id: &str) -> bool {
@@ -111,8 +122,15 @@ pub fn encode_args(job: &VideoJob, ctx: &VideoCtx, pass: Option<u32>, x264: bool
             a.push(pass.unwrap_or(1).to_string());
             a.push("--stats".into());
             a.push(format!("{}.stat", ctx.temp_base));
-            if pass == Some(1) && x264 {
-                a.push("--slow-firstpass".into());
+            if pass == Some(1) {
+                // x264：官方默认首遍自动跳过部分分析（与 MeGUI/HandBrake 一致），
+                // 加 --slow-firstpass 反而拖慢约 25%，最终质量由二遍决定不受影响；
+                // x265：无此机制，首遍显式用 faster 预设采集 stats（实测与二遍兼容，
+                // 输出合法流），二遍仍按原始速度档编码
+                if !x264 {
+                    a.push("--preset".into());
+                    a.push("faster".into());
+                }
             }
         }
         _ => {}
@@ -253,6 +271,12 @@ pub fn encoder_option_args(encoder: &str, options: &std::collections::BTreeMap<S
         }
         // NVENC 参数面板白名单透传（预设/Multipass/空间AQ/Lookahead）
         "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => {
+            let panel_set = |k: &str| options.get(k).map(|v| !v.is_empty()).unwrap_or(false);
+            if !panel_set("preset") && !panel_set("multipass") && !panel_set("spatial-aq") && !panel_set("lookahead") {
+                // 面板全空时的智能默认：hq 调优 + 前瞻 + 空间AQ（NVENC 出厂默认 p4 无这些，
+                // 三者是纯画质增益，速度代价 ~1-2%；用户在面板填了任意一项则完全尊重面板）
+                a.extend(["-tune".into(), "hq".into(), "-rc-lookahead".into(), "20".into(), "-spatial-aq".into(), "1".into()]);
+            }
             for (k, v) in options {
                 if v.is_empty() {
                     continue;
@@ -382,10 +406,13 @@ pub fn build_soft_plan(job: &VideoJob, ctx: &VideoCtx) -> Result<Plan, String> {
         output,
         steps,
         shutdown_after: job.shutdown_after,
+        fallback: None,
     })
 }
 
 /// GPU（ffmpeg 硬编）计划：单步完成（含音频与滤镜链）。
+/// ctx.hwaccel = true 时走 NVDEC 硬解直通（cuda 帧全程不下 CPU），
+/// 由调用方准备同参数软解 Plan 作为 fallback（NVDEC 不支持的源自动回退）。
 pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration: f64) -> Result<Plan, String> {
     if job.input.is_empty() {
         return Err("未选择输入视频".into());
@@ -393,6 +420,8 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
     if ctx.ffmpeg.is_empty() {
         return Err("未找到 ffmpeg，GPU 编码不可用".into());
     }
+    // 硬解直通防御性复核：字幕烧录需 CPU 帧域，出现即自动降级软解
+    let hw = ctx.hwaccel && job.subtitle.is_empty() && job.encoder.ends_with("_nvenc");
     let mut vf: Vec<String> = Vec::new();
     if job.start_frame > 0 || job.frames > 0 {
         let end = if job.frames > 0 { job.start_frame + job.frames } else { 0 };
@@ -404,19 +433,33 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
         vf.push("setpts=PTS-STARTPTS".into());
     }
     if !job.keep_res && job.width > 0 && job.height > 0 {
-        vf.push(format!("scale={}:{},flags=lanczos", job.width, job.height));
+        vf.push(if hw {
+            format!("scale_cuda={}:{}:format=nv12", job.width, job.height)
+        } else {
+            format!("scale={}:{},flags=lanczos", job.width, job.height)
+        });
     }
     if !job.subtitle.is_empty() {
         vf.push(format!("subtitles='{}'", escape_filter_path(&job.subtitle)));
     }
-    let pix_fmt = job.enc_options.get("pix_fmt").cloned().unwrap_or_else(|| "yuv420p".into());
-    vf.push(format!("format={}", pix_fmt));
+    if hw {
+        // cuda 帧域内归一为 nv12 8bit（与软解路径 format=yuv420p 输出语义一致，
+        // 规避 Hi10P 源直通 p010 进 h264_nvenc 必然失败的问题）
+        if vf.iter().any(|f| f.starts_with("scale_cuda=")) {
+            // 带尺寸的 scale_cuda 已含 format=nv12，无需追加
+        } else {
+            vf.push("scale_cuda=format=nv12".into());
+        }
+    } else {
+        let pix_fmt = job.enc_options.get("pix_fmt").cloned().unwrap_or_else(|| "yuv420p".into());
+        vf.push(format!("format={}", pix_fmt));
+    }
 
-    let mut args: Vec<String> = vec![
-        "-hide_banner".into(), "-y".into(), "-i".into(), job.input.clone(),
-        "-vf".into(), vf.join(","),
-        "-c:v".into(), job.encoder.clone(),
-    ];
+    let mut args: Vec<String> = vec!["-hide_banner".into(), "-y".into()];
+    if hw {
+        args.extend(["-hwaccel".into(), "cuda".into(), "-hwaccel_output_format".into(), "cuda".into()]);
+    }
+    args.extend(["-i".into(), job.input.clone(), "-vf".into(), vf.join(","), "-c:v".into(), job.encoder.clone()]);
     let bitrate_mode = job.mode == "bitrate" || job.mode == "2pass";
     match job.encoder.as_str() {
         // 现代版 x265/x264：CRF/码率由主面板控制，预设参数来自 enc_options
@@ -473,6 +516,7 @@ pub fn build_gpu_plan(job: &VideoJob, ctx: &VideoCtx, has_audio: bool, duration:
         output: job.output.clone(),
         steps: vec![step],
         shutdown_after: job.shutdown_after,
+        fallback: None,
     })
 }
 
@@ -571,13 +615,15 @@ mod tests {
     }
 
     #[test]
-    fn test_soft_plan_2pass_x264_slow_firstpass() {
+    fn test_soft_plan_2pass_x264_fast_firstpass() {
+        // x264 官方默认：首遍自动跳过部分分析（不再加 --slow-firstpass）
         let mut j = job();
         j.encoder = "x264_64-8bit.exe".into();
         j.mode = "2pass".into();
         j.audio_mode = "none".into();
         let p = build_soft_plan(&j, &ctx()).unwrap();
-        assert!(p.steps[0].args.contains(&"--slow-firstpass".to_string()));
+        assert!(!p.steps[0].args.contains(&"--slow-firstpass".to_string()));
+        assert!(p.steps[0].args.contains(&"--pass 1".to_string()) || p.steps[0].args.contains(&"1".to_string()));
     }
 
     #[test]
@@ -696,6 +742,87 @@ mod tests {
     }
 
     #[test]
+    fn test_gpu_plan_hwaccel_nvdec_passthrough() {
+        // 硬解直通：-hwaccel cuda 前置 + scale_cuda 归一 nv12
+        let mut j = job();
+        j.encoder = "hevc_nvenc".into();
+        let mut c = ctx();
+        c.hwaccel = true;
+        let p = build_gpu_plan(&j, &c, false, 0.0).unwrap();
+        let a = &p.steps[0].args;
+        let joined = a.join(" ");
+        assert!(joined.contains("-hwaccel cuda -hwaccel_output_format cuda"));
+        // 硬解时 cuda 帧域归一 nv12，等价软解路径的 format=yuv420p
+        assert!(joined.contains("scale_cuda=format=nv12"));
+        assert!(!joined.contains("format=yuv420p"));
+        assert!(p.fallback.is_none());
+    }
+
+    #[test]
+    fn test_gpu_plan_hwaccel_resize_uses_scale_cuda() {
+        let mut j = job();
+        j.encoder = "h264_nvenc".into();
+        j.keep_res = false;
+        j.width = 1280;
+        j.height = 720;
+        let mut c = ctx();
+        c.hwaccel = true;
+        let p = build_gpu_plan(&j, &c, false, 0.0).unwrap();
+        let joined = p.steps[0].args.join(" ");
+        assert!(joined.contains("scale_cuda=1280:720:format=nv12"));
+        assert!(!joined.contains("flags=lanczos"));
+        // 已有 scale_cuda（含格式）时不追加第二个格式滤镜
+        assert_eq!(joined.matches("scale_cuda").count(), 1);
+    }
+
+    #[test]
+    fn test_gpu_plan_hwaccel_with_subtitle_degrades() {
+        // 字幕烧录需要 CPU 帧域：hwaccel 自动降级软解滤镜链
+        let mut j = job();
+        j.encoder = "hevc_nvenc".into();
+        j.subtitle = "D:\\s ass.ass".into();
+        let mut c = ctx();
+        c.hwaccel = true;
+        let p = build_gpu_plan(&j, &c, true, 60.0).unwrap();
+        let joined = p.steps[0].args.join(" ");
+        assert!(!joined.contains("-hwaccel"));
+        assert!(joined.contains("subtitles="));
+        assert!(joined.contains("format=yuv420p"));
+    }
+
+    #[test]
+    fn test_hwaccel_eligible() {
+        assert!(hwaccel_eligible("hevc_nvenc", "hevc", false));
+        assert!(hwaccel_eligible("h264_nvenc", "h264", false));
+        assert!(hwaccel_eligible("av1_nvenc", "av1", false));
+        assert!(!hwaccel_eligible("hevc_nvenc", "hevc", true)); // 字幕
+        assert!(!hwaccel_eligible("hevc_qsv", "hevc", false)); // 仅 NVENC
+        assert!(!hwaccel_eligible("x265_64-8bit[gcc].exe", "hevc", false)); // 软编
+        assert!(!hwaccel_eligible("hevc_nvenc", "mpeg2video", false)); // NVDEC 准入门控
+        assert!(!hwaccel_eligible("libx265", "hevc", false)); // ffmpeg 软编
+    }
+
+    #[test]
+    fn test_soft_plan_2pass_x265_fast_firstpass() {
+        // x265 首遍显式 faster 采集 stats，二遍保持原始速度档
+        let mut j = job();
+        j.mode = "2pass".into();
+        j.bitrate = 800;
+        j.audio_mode = "none".into();
+        let p = build_soft_plan(&j, &ctx()).unwrap();
+        let s1 = p.steps[0].args.join(" ");
+        let s2 = p.steps[1].args.join(" ");
+        assert!(s1.contains("--pass 1") && s1.contains("--preset faster"));
+        assert!(s2.contains("--pass 2") && !s2.contains("--preset faster"));
+        // 用户 extra 可覆盖首遍预设
+        let mut c = ctx();
+        c.extra = "--preset slow".into();
+        let p = build_soft_plan(&j, &c).unwrap();
+        let s1 = p.steps[0].args.join(" ");
+        assert!(s1.rfind("--preset faster").unwrap() < s1.rfind("--preset slow").unwrap());
+    }
+
+    #[test]
     fn test_is_ffmpeg_encoder() {
         assert!(is_ffmpeg_encoder("h264_nvenc"));
         assert!(is_ffmpeg_encoder("prores_ks"));
@@ -762,6 +889,25 @@ mod tests {
         assert!(j.contains("-spatial-aq 1"));
         assert!(j.contains("-lookahead 32"));
         assert!(!j.contains("evil"));
+        // 面板有配置时不注入默认
+        assert!(!j.contains("-tune hq"));
+    }
+
+    #[test]
+    fn test_encoder_option_args_nvenc_smart_defaults() {
+        // 面板全空：注入 hq + lookahead + 空间AQ（纯画质增益）
+        let a = encoder_option_args("hevc_nvenc", &Default::default(), 0.0);
+        let j = a.join(" ");
+        assert!(j.contains("-tune hq"));
+        assert!(j.contains("-rc-lookahead 20"));
+        assert!(j.contains("-spatial-aq 1"));
+        // 面板只填 preset：不注入默认（完全尊重用户选择）
+        let mut o = std::collections::BTreeMap::new();
+        o.insert("preset".into(), "p1".into());
+        let a = encoder_option_args("h264_nvenc", &o, 0.0);
+        let j = a.join(" ");
+        assert!(j.contains("-preset p1"));
+        assert!(!j.contains("-tune"));
     }
 
     #[test]

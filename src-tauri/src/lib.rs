@@ -130,6 +130,9 @@ pub fn run() {
             commands::open_logs_dir,
             commands::delete_logs,
             commands::check_update,
+            commands::download_update,
+            commands::apply_update,
+            commands::update_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

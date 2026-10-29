@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 工具链定位结果（一次性发给前端）。
@@ -34,7 +34,7 @@ pub struct AudioEnc {
     pub available: bool,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuEntry {
     pub id: String,
