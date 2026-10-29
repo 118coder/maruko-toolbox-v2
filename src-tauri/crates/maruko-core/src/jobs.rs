@@ -224,7 +224,7 @@ fn worker_loop(sh: Arc<Shared>) {
             }
         };
         let id = item.id;
-        let plan = item.plan;
+        let mut plan = item.plan;
         let opts = item.opts;
         sh.cancel.store(false, Ordering::SeqCst);
         sh.dead.store(false, Ordering::SeqCst);
@@ -232,7 +232,22 @@ fn worker_loop(sh: Arc<Shared>) {
         emit_state(&sh.emitter, id, "running", &plan, "");
         crate::logs::write(&format!("任务 #{} 开始：{}", id, plan.title));
 
-        let ok = run_plan(id, &plan, &sh, &opts);
+        let mut tried_steps: Vec<Step> = Vec::new();
+        let mut ok = run_plan(id, &plan, &sh, &opts);
+        tried_steps.extend(plan.steps.iter().cloned());
+        // 回退计划：主计划失败且非用户取消时自动改跑（如 NVENC 硬解不支持的源 → 软解重试）
+        while !ok && !sh.cancel.load(Ordering::SeqCst) {
+            match plan.fallback.take() {
+                Some(fb) => {
+                    crate::logs::write(&format!("任务 #{} 主计划失败，自动回退：{}", id, fb.title));
+                    emit_state(&sh.emitter, id, "running", &fb, "主方案失败，已自动回退重试");
+                    ok = run_plan(id, &fb, &sh, &opts);
+                    tried_steps.extend(fb.steps.iter().cloned());
+                    plan = *fb;
+                }
+                None => break,
+            }
+        }
         let state = if sh.cancel.load(Ordering::SeqCst) {
             "cancelled"
         } else if ok {
@@ -243,9 +258,9 @@ fn worker_loop(sh: Arc<Shared>) {
         emit_state(&sh.emitter, id, state, &plan, "");
         crate::logs::write(&format!("任务 #{} 结束：{}", id, state));
 
-        // 临时文件清理
+        // 临时文件清理（含回退计划链中所有尝试过的步骤）
         if opts.delete_temp && state != "cancelled" {
-            for step in &plan.steps {
+            for step in &tried_steps {
                 for t in &step.temp_outputs {
                     let _ = std::fs::remove_file(t);
                 }
@@ -349,6 +364,7 @@ fn run_chain(id: u32, steps: &[Step], sh: &Arc<Shared>, opts: &RunOpts) -> bool 
         let dead_err = dead.clone();
         stderr_handles.push(std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
+            let mut last_prog_log = Instant::now() - std::time::Duration::from_secs(1);
             for chunk in ChunkIter::new(reader) {
                 if dead_err.load(Ordering::SeqCst) {
                     return;
@@ -357,9 +373,20 @@ fn run_chain(id: u32, steps: &[Step], sh: &Arc<Shared>, opts: &RunOpts) -> bool 
                     if line.trim().is_empty() {
                         continue;
                     }
-                    if let Some(mut p) = parse_progress(&parser, &line, t0.elapsed().as_secs_f64()) {
+                    let prog = parse_progress(&parser, &line, t0.elapsed().as_secs_f64());
+                    let is_progress = prog.is_some();
+                    let near_end = prog.as_ref().map(|p| p.pct >= 100.0).unwrap_or(false);
+                    if let Some(mut p) = prog {
                         p.id = id;
                         em(Ev::Progress(p));
+                    }
+                    // 进度刷新行节流（编码器逐帧 \r 刷新，可达 100+ 行/秒）：
+                    // 不节流会拖慢 IPC、日志 DOM 与日志文件写入；普通输出行全量保留
+                    if is_progress && !near_end && last_prog_log.elapsed() < std::time::Duration::from_millis(400) {
+                        continue;
+                    }
+                    if is_progress {
+                        last_prog_log = Instant::now();
                     }
                     em(Ev::Log(LogLine { id, line: line.to_string() }));
                 }
@@ -466,6 +493,7 @@ fn run_single(id: u32, step: &Step, stdin: Option<std::process::ChildStdout>, sh
     let t0 = Instant::now();
     let h_err = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
+        let mut last_prog_log = Instant::now() - std::time::Duration::from_secs(1);
         for chunk in ChunkIter::new(reader) {
             if dead_err.load(Ordering::SeqCst) {
                 return;
@@ -474,9 +502,19 @@ fn run_single(id: u32, step: &Step, stdin: Option<std::process::ChildStdout>, sh
                 if line.trim().is_empty() {
                     continue;
                 }
-                if let Some(mut p) = parse_progress(&parser, &line, t0.elapsed().as_secs_f64()) {
+                let prog = parse_progress(&parser, &line, t0.elapsed().as_secs_f64());
+                let is_progress = prog.is_some();
+                let near_end = prog.as_ref().map(|p| p.pct >= 100.0).unwrap_or(false);
+                if let Some(mut p) = prog {
                     p.id = id;
                     em1(Ev::Progress(p));
+                }
+                // 进度刷新行节流（同 run_chain）
+                if is_progress && !near_end && last_prog_log.elapsed() < std::time::Duration::from_millis(400) {
+                    continue;
+                }
+                if is_progress {
+                    last_prog_log = Instant::now();
                 }
                 em1(Ev::Log(LogLine { id, line: line.to_string() }));
             }
@@ -734,5 +772,42 @@ mod tests {
     fn test_hms() {
         assert!((hms_to_secs_f("0:00:36") - 36.0).abs() < 0.001);
         assert!((hms_to_secs_f("00:01:02.5") - 62.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_plan_fallback_runs_on_failure() {
+        // 集成：主计划必败 → 自动跑回退计划 → 任务最终 done
+        let fail_step = Step::new("必败步骤", "cmd.exe", vec!["/C".into(), "exit".into(), "1".into()]);
+        let ok_step = Step::new("回退步骤", "cmd.exe", vec!["/C".into(), "exit".into(), "0".into()]);
+        let mut main_plan = Plan::new("主计划", "out.bin", vec![fail_step], false);
+        main_plan.fallback = Some(Box::new(Plan::new("回退计划", "out.bin", vec![ok_step], false)));
+
+        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
+        let emitter: Arc<Emitter> = Arc::new(Box::new(move |ev| {
+            let _ = tx.send(ev);
+        }));
+        let jm = JobManager::new(emitter);
+        jm.submit(main_plan, RunOpts::default());
+
+        // 收集状态直到 done/failed（含回退的二次 running）
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut states = Vec::new();
+        loop {
+            let ev = rx.recv_timeout(std::time::Duration::from_secs(5));
+            match ev {
+                Ok(Ev::State(s)) => {
+                    let terminal = s.state == "done" || s.state == "failed" || s.state == "cancelled";
+                    states.push(s.state.clone());
+                    if terminal {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) if std::time::Instant::now() > deadline => panic!("回退集成测试超时"),
+                Err(_) => break,
+            }
+        }
+        assert_eq!(states.last().map(|s| s.as_str()), Some("done"), "回退后任务应完成，实际：{:?}", states);
+        assert_eq!(states.iter().filter(|s| s.as_str() == "running").count(), 2, "应有主/回退两次 running，实际：{:?}", states);
     }
 }

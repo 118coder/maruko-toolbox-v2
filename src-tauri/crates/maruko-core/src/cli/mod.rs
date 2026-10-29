@@ -49,6 +49,14 @@ pub struct Plan {
     pub output: String,
     pub steps: Vec<Step>,
     pub shutdown_after: bool,
+    /// 主计划失败且非用户取消时自动改跑的回退计划（如 GPU 硬解失败 → 软解重试）
+    pub fallback: Option<Box<Plan>>,
+}
+
+impl Plan {
+    pub fn new(title: impl Into<String>, output: impl Into<String>, steps: Vec<Step>, shutdown_after: bool) -> Plan {
+        Plan { title: title.into(), output: output.into(), steps, shutdown_after, fallback: None }
+    }
 }
 
 /// 类 shell 的参数拆分（支持引号），用于"自定义命令行"。

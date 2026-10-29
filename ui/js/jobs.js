@@ -117,20 +117,35 @@ export function initJobsUI() {
     }
   });
 
-  onJobProgress((p) => {
+  // 进度渲染合并：编码器逐帧刷新进度（100+事件/秒），DOM 写入合并到每帧最多一次
+  let pendingProgress = null;
+  let progressRaf = 0;
+  function paintProgress() {
+    progressRaf = 0;
+    const p = pendingProgress;
+    if (!p) return;
     const j = jobs.get(p.id);
-    if (!j) return;
-    j.progress = p;
-    if (currentId === p.id) {
+    if (j && currentId === p.id) {
       el('pbarfill').style.width = p.pct.toFixed(1) + '%';
       el('ppct').textContent = p.pct.toFixed(1) + '%';
       renderStats(j);
     }
-    // 内嵌进度条跟随运行中的任务
     const running = [...jobs.values()].find((x) => x.state === 'running');
     if (running && running.id === p.id) {
       el('ipBar').style.width = p.pct.toFixed(1) + '%';
       el('ipPct').textContent = p.pct.toFixed(1) + '%';
+    }
+  }
+  onJobProgress((p) => {
+    const j = jobs.get(p.id);
+    if (!j) return;
+    j.progress = p;
+    const selected = currentId === p.id;
+    const running = [...jobs.values()].find((x) => x.state === 'running');
+    const strip = running && running.id === p.id;
+    if (selected || strip) {
+      pendingProgress = p;
+      if (!progressRaf) progressRaf = requestAnimationFrame(paintProgress);
     }
   });
 

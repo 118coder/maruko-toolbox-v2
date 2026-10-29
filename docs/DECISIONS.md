@@ -29,6 +29,12 @@
 | D24 | 工具链现代化（v2.4）：x265→4.3 multilib、x264→r3214 t_mod（均为单 exe 多位深库，代码按文件名注入 `-D`/`--output-depth` 位深参数）、MKVToolNix→v101（`--default-duration` 加 fps 单位）、MediaInfo.dll→25.09（根级与 x64\ 两处）、ffmpeg 保持 7.1；AviSynth/avs4x26x/MP4Box/neroAacEnc 保留旧版（生态依赖/无性能影响/渠道不可达/上游停更）；新工具链维护于 E:\maruko-build	ools-modern，打包脚本从它复制，原版安装目录不动 | 软编路线同质量提速约 20-50%（x265 2.5→4.3 的 AVX2/asm 增强与压缩率改进）、新格式封装兼容性、新版 MediaInfo 探测；文件名保持不变使代码与用户配置零迁移 |
 | D20 | 窗口尺寸 640×640（原版 624×583），最小 580×540，可缩放；控件布局按截图 1:1 复刻但用现代间距令牌 | 现代化要求 + 高分屏可读性 |
 
+| D25 | 性能轮（2026-10-30）：GPU 探测并行化 + 磁盘缓存（路径+mtime）、工具深度探测后台化（tools://ready 事件）、进度日志节流（400ms/条）、前端进度 rAF 合并、2Pass 去 --slow-firstpass、NVENC 面板全空时注入 -tune hq -rc-lookahead 20 -spatial-aq 1、libx264 探测缓存、Release LTO。 | 秒开（主窗不等子进程）+ 编码时 UI 顺滑 + 硬编/2Pass 稳定提速，全部不改变输出质量语义 |
+| D26 | AppState.tools 由 OnceLock 改 Mutex<Tools>：save_settings 检测 tools_dir/ffmpeg_path/enable_x265 变更即重解析并后台深刷；get_tools_info 只返回轻量快照 | 修复存量 bug：旧版改工具链目录后任务提交仍用旧路径 |
+| D27 | GPU 硬解直通（2026-10-30 二轮，实测 HEVC 10bit +94% / 1080p H264 +26% / 4K +2% 后落地）：仅 NVENC + 源 vcodec ∈ {h264,hevc,av1} + 无字幕时启用 `-hwaccel cuda -hwaccel_output_format cuda`，vf 用 scale_cuda（含 format=nv12 统一 8bit，对齐软解输出语义）；Plan 新增 fallback 字段，硬解失败自动回退同参软解计划重试 | 实测数据支持；回退机制保证最坏情况 = 旧行为 + 几秒重试，稳定性不降。QSV/AMF 独立 hwaccel 管线未验证不启用 |
+| D28 | x265 2Pass 首遍注入 `--preset faster` 采集 stats（x264 官方已有首遍自动降速，无需参数）；实测 x265 4.3 跨 preset stats 兼容、二遍输出合法 | 2Pass 总耗时约 -20%，二遍质量由原始速度档决定不受影响；用户 extra 可覆盖 |
+| D29 | MP4Box 维持 2016 版：本轮经代理重试 download.gpac.io / files.gpac.io，TLS 握手仍被掐断（与 2026-09-14 记录一致）；2016 版封装新流已验证可用 | 渠道不可达 + 现状可用；网络可用时按文件名替换 tools\MP4Box.exe 即可，无需改代码 |
+
 ## 与原版交互细节的忠实度说明
 
 - 起始帧/编码帧数 → AVS `Trim(start, start+N-1)` 实现（与 avs4x26x 管线一致）

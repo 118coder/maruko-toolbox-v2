@@ -30,9 +30,16 @@ export function saveSettings(immediate = false) {
 }
 
 export async function loadTools() {
+  // 轻量快照（毫秒级）；GPU/专业编码器/特性由后端 tools://ready 事件异步补齐
   state.tools = await invoke('get_tools_info');
-  state.features = await invoke('check_ffmpeg_features');
   return state.tools;
+}
+
+/** 合并 tools://ready 推送的深度探测结果（GPU 编码器、专业编码器、特性） */
+export function mergeToolsReady(payload) {
+  if (!payload) return;
+  if (payload.tools) state.tools = payload.tools;
+  if (payload.features) state.features = payload.features;
 }
 
 /** 软编码器 + GPU 编码器合成视频编码器下拉选项 */

@@ -49,9 +49,13 @@
   → cli::video::build_mux_argv()        # MP4Box/mkvmerge 封装 argv
   → jobs::submit(计划: [avs]→[encode]→[mux]) → 串行执行 → 进度事件
 ```
-GPU 路径不走 AVS：`cli::video::build_gpu_argv()` 直接 ffmpeg 滤镜链（scale/trim/subtitles）。
+GPU 路径不走 AVS：`cli::video::build_gpu_plan()` 直接 ffmpeg 滤镜链（scale/trim/subtitles）。
+NVENC 且源可被 NVDEC 解（h264/hevc/av1）且无字幕时启用硬解直通（`-hwaccel cuda` +
+scale_cuda，cuda 帧全程不下 CPU，HEVC 10bit 实测约 +94%），并自动附同参软解
+`Plan.fallback`——硬解失败（罕见 NVDEC 不支持的 profile 等）由 jobs worker 自动回退重试。
 
 ### 进度解析（jobs::progress）
 - x264/x265：解析 stderr `\r` 分片中的 `a/b frames` 与 `xx.xx%`
 - ffmpeg：解析 `time=` 并结合 ffprobe 时长换算百分比
-- 全部原始行同步转发 `job://log` 供日志窗查看
+- 全部原始行同步转发 `job://log` 供日志窗查看；进度刷新行（\r）按 400ms 节流转发，
+  避免高频 IPC/DOM/日志写入（普通输出行不受影响）

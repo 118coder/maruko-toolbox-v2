@@ -14,8 +14,9 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
-    pub tools: OnceLock<Tools>,
-    pub gpu: GpuDetector,
+    /// 工具链快照：设置页改目录/ffmpeg 后由 save_settings 同步重解析
+    pub tools: Mutex<Tools>,
+    pub gpu: Arc<GpuDetector>,
     pub jobs: JobManager,
 }
 
@@ -25,14 +26,14 @@ impl AppState {
         let tools = locator::resolve(&s);
         AppState {
             settings: Mutex::new(s),
-            tools: OnceLock::from(tools),
-            gpu: GpuDetector::new(),
+            tools: Mutex::new(tools),
+            gpu: Arc::new(GpuDetector::new()),
             jobs: JobManager::new(emitter),
         }
     }
 
-    pub fn tools(&self) -> &Tools {
-        self.tools.get().unwrap()
+    pub fn tools(&self) -> Tools {
+        self.tools.lock().unwrap().clone()
     }
 }
 
@@ -81,13 +82,26 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, app: AppHandle, new_settings: Settings) -> Result<Settings, String> {
-    let mut st = state.settings.lock().unwrap();
-    *st = new_settings;
-    settings::save(&st)?;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_theme(Some(if st.dark { Theme::Dark } else { Theme::Light }));
+    let tools_changed;
+    {
+        let mut st = state.settings.lock().unwrap();
+        tools_changed = st.tools_dir != new_settings.tools_dir
+            || st.ffmpeg_path != new_settings.ffmpeg_path
+            || st.enable_x265 != new_settings.enable_x265;
+        *st = new_settings;
+        settings::save(&st)?;
     }
-    Ok(st.clone())
+    if tools_changed {
+        // 同步重解析轻量部分（毫秒级），GPU 等深度探测交给后台
+        let s = state.settings.lock().unwrap().clone();
+        *state.tools.lock().unwrap() = locator::resolve(&s);
+        spawn_tools_refresh(app.clone(), &state);
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let dark = state.settings.lock().unwrap().dark;
+        let _ = w.set_theme(Some(if dark { Theme::Dark } else { Theme::Light }));
+    }
+    Ok(state.settings.lock().unwrap().clone())
 }
 
 #[tauri::command]
@@ -99,59 +113,118 @@ pub fn reset_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-pub fn get_tools_info(state: State<AppState>) -> Tools {
-    let s = state.settings.lock().unwrap().clone();
-    let mut tools = locator::resolve(&s);
-    tools.gpu_info = state.gpu.detect(&tools.ffmpeg);
-    // Voukoder 风格专业编码器：解析 ffmpeg -encoders 过滤精选清单
-    if !tools.ffmpeg.is_empty() {
-        if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
-            let txt = String::from_utf8_lossy(&o.stdout);
-            let curated: &[(&str, &str)] = &[
-                ("libx265", "现代版 x265（Voukoder 风格预设）"),
-                ("libx264", "现代版 x264（Voukoder 风格预设）"),
-                ("prores_ks", "ProRes 422（专业剪辑）"),
-                ("cfhd", "CineForm（专业剪辑）"),
-                ("ffv1", "FFV1（无损归档）"),
-                ("utvideo", "UtVideo（无损）"),
-                ("libvpx-vp9", "VP9（webm）"),
-            ];
-            for (id, label) in curated {
-                if txt.contains(&format!(" {}", id)) {
-                    tools.ffmpeg_encoders.push(locator::EncoderEntry {
-                        id: id.to_string(),
-                        label: label.to_string(),
-                        gpu: false,
-                    });
-                }
-            }
-        }
-    }
+pub fn get_tools_info(app: AppHandle, state: State<AppState>) -> Tools {
+    // 立即返回轻量快照（纯文件系统检查，毫秒级），主窗不等待任何子进程。
+    // GPU 试编码 / 专业编码器清单 / 特性检测由后台完成并经 tools://ready 推送。
+    let tools = state.tools();
+    spawn_tools_refresh(app, &state);
     tools
 }
 
-#[derive(Serialize)]
+/// 深度探测去重标志
+static TOOLS_REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 后台深度探测：GPU 试编码（并行 + 磁盘缓存）→ ffmpeg 专业编码器清单 → libx264/subtitles 特性。
+/// 完成后更新主快照并发 tools://ready 事件；不阻塞任何命令。
+fn spawn_tools_refresh(app: AppHandle, state: &State<AppState>) {
+    use std::sync::atomic::Ordering;
+    if TOOLS_REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let gpu = state.gpu.clone();
+    let settings = state.settings.lock().unwrap().clone();
+    std::thread::spawn(move || {
+        let mut tools = locator::resolve(&settings);
+        tools.gpu_info = gpu.detect(&tools.ffmpeg);
+        // Voukoder 风格专业编码器：解析 ffmpeg -encoders 过滤精选清单
+        if !tools.ffmpeg.is_empty() {
+            if let Ok(o) = cmd_nowin(&tools.ffmpeg).args(["-hide_banner", "-encoders"]).output() {
+                let txt = String::from_utf8_lossy(&o.stdout);
+                let curated: &[(&str, &str)] = &[
+                    ("libx265", "现代版 x265（Voukoder 风格预设）"),
+                    ("libx264", "现代版 x264（Voukoder 风格预设）"),
+                    ("prores_ks", "ProRes 422（专业剪辑）"),
+                    ("cfhd", "CineForm（专业剪辑）"),
+                    ("ffv1", "FFV1（无损归档）"),
+                    ("utvideo", "UtVideo（无损）"),
+                    ("libvpx-vp9", "VP9（webm）"),
+                ];
+                for (id, label) in curated {
+                    if txt.contains(&format!(" {}", id)) {
+                        tools.ffmpeg_encoders.push(locator::EncoderEntry {
+                            id: id.to_string(),
+                            label: label.to_string(),
+                            gpu: false,
+                        });
+                    }
+                }
+            }
+        }
+        let features = detect_features(&tools.ffmpeg);
+        // 更新主快照后推送
+        if let Some(st) = app.try_state::<AppState>() {
+            *st.tools.lock().unwrap() = tools.clone();
+        }
+        let _ = app.emit("tools://ready", ToolsReadyPayload { tools, features });
+        maruko_core::logs::write("工具链深度探测完成（tools://ready 已推送）");
+        TOOLS_REFRESHING.store(false, Ordering::SeqCst);
+    });
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ToolsReadyPayload {
+    tools: Tools,
+    features: LibCheck,
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LibCheck {
     pub libx264: bool,
     pub subtitles_filter: bool,
 }
 
-#[tauri::command]
-pub fn check_ffmpeg_features(state: State<AppState>) -> LibCheck {
-    let ff = &state.tools().ffmpeg;
-    if ff.is_empty() {
+/// libx264 探测结果缓存（ffmpeg 路径为键）：一图流/旋转等命令不再反复 spawn -encoders
+static LIBX264_CACHE: OnceLock<Mutex<Option<(String, bool)>>> = OnceLock::new();
+
+fn cached_libx264(ffmpeg: &str) -> bool {
+    if ffmpeg.is_empty() {
+        return false;
+    }
+    let cache = LIBX264_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let g = cache.lock().unwrap();
+        if let Some((path, ok)) = g.as_ref() {
+            if path == ffmpeg {
+                return *ok;
+            }
+        }
+    }
+    let ok = cmd_nowin(ffmpeg)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 ")))
+        .unwrap_or(false);
+    *cache.lock().unwrap() = Some((ffmpeg.to_string(), ok));
+    ok
+}
+
+fn detect_features(ffmpeg: &str) -> LibCheck {
+    if ffmpeg.is_empty() {
         return LibCheck { libx264: false, subtitles_filter: false };
     }
-    let mut libx264 = false;
+    let libx264 = cached_libx264(ffmpeg);
     let mut subtitles_filter = false;
-    if let Ok(o) = cmd_nowin(ff).args(["-hide_banner", "-encoders"]).output() {
-        libx264 = String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 "));
-    }
-    if let Ok(o) = cmd_nowin(ff).args(["-hide_banner", "-filters"]).output() {
+    if let Ok(o) = cmd_nowin(ffmpeg).args(["-hide_banner", "-filters"]).output() {
         subtitles_filter = String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" subtitles "));
     }
     LibCheck { libx264, subtitles_filter }
+}
+
+#[tauri::command]
+pub fn check_ffmpeg_features(state: State<AppState>) -> LibCheck {
+    detect_features(&state.tools().ffmpeg)
 }
 
 // ---------- 对话框 / 打开 ----------
@@ -376,7 +449,7 @@ fn prepare_video_job(
                 demuxer,
                 &filters,
                 &tools.tools_dir,
-                &avs_dir(tools),
+                &avs_dir(&tools),
                 "",
                 job.start_frame,
                 job.frames,
@@ -400,8 +473,24 @@ fn prepare_video_job(
         priority: settings.x264_priority.clone(),
         threads: settings.x264_threads,
         extra: settings.x264_extra.clone(),
+        // NVENC 硬解直通准入：NVDEC 可解 h264/hevc/av1 主流形态；罕见不支持的源
+        // 由 encode 阶段的 Plan.fallback 自动回退软解，无需预检
+        hwaccel: gpu && cli::video::hwaccel_eligible(&job.encoder, &info.vcodec, job.subtitle.is_empty()),
     };
     Ok((ctx, info.has_audio, info.duration))
+}
+
+/// GPU 任务：硬解主计划 + 同参软解回退计划（NVDEC 不支持的源自动重试）。
+fn gpu_plan_with_fallback(job: &VideoJob, ctx: &cli::video::VideoCtx, has_audio: bool, duration: f64) -> Result<cli::Plan, String> {
+    let mut plan = cli::video::build_gpu_plan(job, ctx, has_audio, duration)?;
+    if ctx.hwaccel {
+        let mut sw_ctx = ctx.clone();
+        sw_ctx.hwaccel = false;
+        let mut fb = cli::video::build_gpu_plan(job, &sw_ctx, has_audio, duration)?;
+        fb.title = format!("{}（软解回退）", fb.title);
+        plan.fallback = Some(Box::new(fb));
+    }
+    Ok(plan)
 }
 
 fn file_name(p: &str) -> String {
@@ -416,7 +505,7 @@ pub fn encode_video(state: State<AppState>, mut job: VideoJob) -> Result<u32, St
     let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
     let (ctx, has_audio, duration) = prepare_video_job(&state, &mut job, None)?;
     let plan = if gpu {
-        cli::video::build_gpu_plan(&job, &ctx, has_audio, duration)?
+        gpu_plan_with_fallback(&job, &ctx, has_audio, duration)?
     } else {
         cli::video::build_soft_plan(&job, &ctx)?
     };
@@ -433,7 +522,7 @@ pub fn encode_video_batch(state: State<AppState>, mut jobs: Vec<VideoJob>, subSu
         let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
         let (ctx, has_audio, duration) = prepare_video_job(&state, job, Some(subSuffix.clone()))?;
         let plan = if gpu {
-            cli::video::build_gpu_plan(job, &ctx, has_audio, duration)?
+            gpu_plan_with_fallback(job, &ctx, has_audio, duration)?
         } else {
             cli::video::build_soft_plan(job, &ctx)?
         };
@@ -455,7 +544,8 @@ pub fn encode_audio(state: State<AppState>, job: AudioJob) -> Result<u32, String
         output: job.output.clone(),
         steps,
         shutdown_after: false,
-    };
+        fallback: None,
+        };
     let opts = run_opts(&state.settings.lock().unwrap());
     maruko_core::logs::write(&format!("提交音频任务（{} → {}）", job.input, job.output));
     Ok(state.jobs.submit(plan, opts))
@@ -474,7 +564,8 @@ pub fn encode_audio_batch(state: State<AppState>, jobs: Vec<AudioJob>) -> Result
             output: job.output.clone(),
             steps,
             shutdown_after: false,
-        };
+            fallback: None,
+            };
         ids.push(state.jobs.submit(plan, opts.clone()));
     }
     Ok(ids)
@@ -489,7 +580,7 @@ pub fn merge_audio(state: State<AppState>, inputs: Vec<String>, encoder: String,
     let ext = cli::audio::output_ext(&encoder);
     let out = cli::auto_output(&inputs[0], &format!("merged.{}", ext), "");
     let steps = cli::audio::build_merge_steps(&inputs, &out, &encoder, bitrate, &tools.tools_dir, &tools.ffmpeg)?;
-    let plan = cli::Plan { title: "合并音频".into(), output: out, steps, shutdown_after: false };
+    let plan = cli::Plan { title: "合并音频".into(), output: out, steps, shutdown_after: false, fallback: None };
     let opts = run_opts(&state.settings.lock().unwrap());
     Ok(state.jobs.submit(plan, opts))
 }
@@ -685,14 +776,7 @@ pub fn rotate_video(state: State<AppState>, mut job: clicommon::RotateJob) -> Re
 }
 
 fn check_libx264(ffmpeg: &str) -> bool {
-    if ffmpeg.is_empty() {
-        return false;
-    }
-    cmd_nowin(ffmpeg)
-        .args(["-hide_banner", "-encoders"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(" libx264 ")))
-        .unwrap_or(false)
+    cached_libx264(ffmpeg)
 }
 
 // ---------- AVS ----------

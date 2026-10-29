@@ -97,7 +97,7 @@ pub fn build_one_pic(job: &OnePicJob, ffmpeg: &str, tools_dir: &str, libx264_ok:
         args.extend(["-shortest".into(), job.output.clone()]);
         let mut s = Step::new("一图流", ffmpeg, args);
         s.parser = Parser::Ffmpeg { duration: job.duration as f64 };
-        return Ok(Plan { title: "一图流".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false });
+        return Ok(Plan { title: "一图流".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false, fallback: None });
     }
     // 回退：y4m 管道 → 原版 x264 → MP4Box 封装
     let mut steps = Vec::new();
@@ -126,7 +126,7 @@ pub fn build_one_pic(job: &OnePicJob, ffmpeg: &str, tools_dir: &str, libx264_ok:
     ]);
     mux.env_path.push(tools_dir.to_string());
     steps.push(mux);
-    Ok(Plan { title: "一图流".into(), output: job.output.clone(), steps, shutdown_after: false })
+    Ok(Plan { title: "一图流".into(), output: job.output.clone(), steps, shutdown_after: false, fallback: None })
 }
 
 /// 截取计划（流复制）。
@@ -149,7 +149,7 @@ pub fn build_cut(job: &CutJob, ffmpeg: &str) -> Result<Plan, String> {
     ]);
     let mut s = Step::new("截取", ffmpeg, args);
     s.parser = Parser::Ffmpeg { duration: 0.0 };
-    Ok(Plan { title: "截取".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false })
+    Ok(Plan { title: "截取".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false, fallback: None })
 }
 
 /// 旋转计划。`libx264_ok` = 本机 ffmpeg 含 libx264，否则管道回退到原版 x264。
@@ -175,7 +175,7 @@ pub fn build_rotate(job: &RotateJob, ffmpeg: &str, _tools_dir: &str, libx264_ok:
     args.extend(["-c:a".into(), "copy".into(), job.output.clone()]);
     let mut s = Step::new("旋转", ffmpeg, args);
     s.parser = Parser::Ffmpeg { duration: 0.0 };
-    Ok(Plan { title: "旋转".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false })
+    Ok(Plan { title: "旋转".into(), output: job.output.clone(), steps: vec![s], shutdown_after: false, fallback: None })
 }
 
 /// MediaInfo 探测出的 fps 分数转 MP4Box 用小数。
