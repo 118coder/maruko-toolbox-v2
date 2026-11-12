@@ -192,3 +192,41 @@ x265 无 x264 那样的首遍自动降速机制。实测 x265 4.3：pass1 `--pre
 **发布包（双资产）**：完整版 `小丸工具箱V2现代版1.1完整版.zip`（186MB，零依赖解压即用）+ 更新包 `MarukoV2-update.zip`（约 7MB，应用内一键更新用）。pack_full.py 一次产出两个。
 
 **发布链路**：分支推送 → PR → 合并 → tag v1.1 → GitHub Release 双资产上传（PAT 经 `git credential fill` 提取；大文件经代理上传）。
+
+## 2026-11-13
+
+### 交互轮：拖放路由修复 + m4a 全格式压制 + 20 项交互优化
+
+**Bug 1 · 拖拽落错栏（严重）**：拖到「一图流」的图片栏，文件却进了「其他」的视频栏。根因是 `dropTarget()` 靠 `[data-drop]` 属性命中拖放区，但 index.html 里从未写过该属性 → 永远落到页面默认目标（常用页默认是 cVideo）。修复：21 个可拖放字段/列表全部加 `data-drop`；`dropTarget` 改为 elementFromPoint + 全拖放区矩形兜底命中（取面积最小者，物理像素→CSS 像素换算误差/边缘漏判也能命中）；常用页默认目标改 oImage（配合智能归位，拖到页面任意空白处都能正确落位）。
+
+**Bug 2 · m4a"不支持压制"**：纯音频文件进了视频管线必失败（软编：AVS `LWLibavVideoSource: failed to get the video track`；GPU 编：`-map 0:v:0` 无视频流）。双保险修复：
+1. 前端：视频页/AVS 页输入为音频扩展名 → 自动改走 `encode_audio`（编码器取共享音频参数，不可用则回退首个可用/ffmpeg_aac），toast 说明；批量压制逐个分流（音频文件生成 AudioJob 走 encode_audio_batch）
+2. 后端：`ProbeInfo` 新增 `has_video`；`prepare_video_job` 探测到无视频流返回 `Prepared::AudioOnly`（沿用 VideoJob 自带的 audio_encoder/audio_bitrate），`encode_video`/`encode_video_batch` 统一经 `submit_audio_only` 提交音频计划（标题注明"源无视频流，已自动转音频"）；cut/rotate/avs_preview 对纯音频源给出明确中文报错
+
+**20 项交互优化（全部落地）**：
+1. 全窗拖放提示层（drag-enter/leave 显隐，pointer-events:none 不挡命中）
+2. 拖动悬停实时高亮目标字段（.drop-hot，rAF 节流）
+3. 拖放命中矩形兜底（DPI 换算容错）
+4. 拖放成功 toast（文件名）+ 字段闪光动画（.drop-flash）
+5. 一图流图/音智能归位（拖错栏自动纠正；图+音混合拖一次填两栏）
+6. 视频页字幕智能识别（字幕文件拖到视频栏自动进字幕栏；混拖自动分配）
+7. 音频文件拖到视频栏自动转音频压制（含批量分流，见 Bug 2）
+8. 音频页拖入非音频自动过滤 + toast
+9. 文件字段 title 悬停显示完整路径（长路径不再截断看不全）
+10. NumBox 滚轮调值
+11. NumBox ↑↓ 方向键调值
+12. NumBox data-min/data-max 保护（时间≥1、FPS≥0.1、CRF≥0、ProRes q 1-31 等 12 处），顺带修复步进闭包捕获导致模式切换后步进不生效的存量 bug
+13. 批量列表 Delete 删除选中 / ↑↓ 移动选中 + 列表项 title 完整路径
+14. Esc 关闭弹窗（音频参数/进度详情/AVS 预览/确认框——确认框走取消按钮保证 Promise resolve）
+15. Ctrl+1~9 快速切换标签页
+16. 常用页自动命名跟随动作（点「截取」命名"截取+原扩展"、点「旋转」命名"旋转"，原先恒为"截取"）
+17. CRF/码率模式切换各自记忆上次值（原先来回重置 800/23.5）
+18. 压制按钮防抖 1.5s（vEncode/vBatchGo/aEncode/aBatchGo/oGo/cCut/cRotate/sGo，防手滑重复提交）
+19. 提交前校验：输出==输入阻止；软编无工具链引导设置页；必填项缺失 toast 并聚焦对应字段
+20. .avs 拖入脚本框自动读取内容（新增 `read_text_file` 命令 + maruko-core `avs::read_text_any`：UTF-8 优先、GBK 容错解码；注意多数常用 GBK 双字节序列恰好也是合法 UTF-8，按 UTF-8 优先策略原样解码属预期）
+
+**附赠**：音频批量提交 toast（已提交 N 个任务）、封装页拖放按栏类型校验（音频栏收视频会提示）、封装默认落点按扩展名归位、抽取页音频文件提前提示"仅可抽取音频"、MediaInfo 拖入 toast。
+
+**回归**：maruko-core 75 单测全过（+1 read_text_any）；cargo check / release 构建通过；新 exe 已部署 dist\小丸工具箱V2现代版1.1.exe；启动冒烟测试正常（04:28 日志无前端错误）。
+
+**遗留**：拖放悬停高亮与命中测试依赖 Tauri 物理像素 ÷ devicePixelRatio，若 Windows 多屏异 DPI 跨屏拖动可能出现命中偏移一个屏的比例误差（矩形兜底可部分缓解）；一图流「复制音频」对非 AAC 音频编码的 m4a 仍建议关闭（ffmpeg copy 容器兼容性，非本轮范围）。

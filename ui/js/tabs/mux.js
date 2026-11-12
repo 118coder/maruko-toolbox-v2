@@ -1,7 +1,7 @@
 // tabs/mux.js —— 封装页（MP4 / MKV / 封装转换）
 
 import { invoke, pickFile } from '../bridge.js';
-import { $, bindFileField, makeListBox, toast, setFieldValue } from '../components.js';
+import { $, bindFileField, makeListBox, toast, setFieldValue, flashField, isAudioFile, isSubFile, baseName } from '../components.js';
 import { state } from '../state.js';
 import { trackJob } from '../jobs.js';
 
@@ -120,10 +120,39 @@ export function initMux() {
 export function handleDrop(paths, target) {
   const first = paths[0];
   if (!first) return;
-  if (target === 'm4Video' || target === 'mkVideo' || target === 'cvBatch') {
-    if (target === 'cvBatch') { for (const p of paths) cvBatch.add(p); }
-    else setFieldValue($(`#${target}`), first);
-  } else if (/\.mp4$|\.mkv$|\.mov$|\.avi$/i.test(first)) {
+  // 明确命中字段：按字段类型校验并归位（拖错类型给出提示）
+  if (target === 'm4Audio' || target === 'mkAudio') {
+    if (!isAudioFile(first)) return toast('音频栏请拖入音频文件', 'err');
+    setFieldValue($(`#${target}`), first);
+    flashField($(`#${target}`));
+    return toast(`已添加音频：${baseName(first)}`, 'ok');
+  }
+  if (target === 'mkSub') {
+    if (!isSubFile(first)) return toast('字幕栏请拖入 ass/ssa/srt 字幕文件', 'err');
+    setFieldValue($('#mkSub'), first);
+    flashField($('#mkSub'));
+    return toast(`已添加字幕：${baseName(first)}`, 'ok');
+  }
+  if (target === 'cvBatch') {
+    for (const p of paths) cvBatch.add(p);
+    return toast(`已加入封装转换列表 ${paths.length} 个文件`, 'ok');
+  }
+  if ((target === 'm4Video' || target === 'mkVideo') && isAudioFile(first)) {
+    return toast('这是音频文件：请拖到对应的「音频」栏', 'err');
+  }
+  if (target === 'm4Video' || target === 'mkVideo') {
+    setFieldValue($(`#${target}`), first);
+    flashField($(`#${target}`));
+    return toast(`已添加视频：${baseName(first)}`, 'ok');
+  }
+  // 默认：按扩展名智能归位（视频 → 合并MP4 视频栏，音频 → 音频栏）
+  if (/\.mp4$|\.mkv$|\.mov$|\.avi$|\.flv$|\.ts$|\.webm$/i.test(first)) {
     setFieldValue($('#m4Video'), first);
+    flashField($('#m4Video'));
+    toast(`已添加视频：${baseName(first)}`, 'ok');
+  } else if (isAudioFile(first)) {
+    setFieldValue($('#m4Audio'), first);
+    flashField($('#m4Audio'));
+    toast(`已添加音频：${baseName(first)}`, 'ok');
   }
 }

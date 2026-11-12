@@ -148,6 +148,7 @@ pub struct ProbeInfo {
     pub duration: f64,
     pub fps: String,
     pub has_audio: bool,
+    pub has_video: bool,
     pub width: u32,
     pub height: u32,
     pub vcodec: String,
@@ -171,11 +172,13 @@ pub fn probe(ffprobe: &str, file: &str) -> Result<ProbeInfo, String> {
         duration: v["format"]["duration"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0),
         fps: st["r_frame_rate"].as_str().unwrap_or("").to_string(),
         has_audio: false,
+        has_video: false,
         width: st["width"].as_u64().unwrap_or(0) as u32,
         height: st["height"].as_u64().unwrap_or(0) as u32,
         vcodec: st["codec_name"].as_str().unwrap_or("").to_string(),
         acodec: String::new(),
     };
+    info.has_video = !info.vcodec.is_empty();
     // 音频流
     let mut cmd2 = Command::new(ffprobe);
     cmd2.args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "json", file]);

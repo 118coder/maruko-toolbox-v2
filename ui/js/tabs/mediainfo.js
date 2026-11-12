@@ -1,7 +1,7 @@
 // tabs/mediainfo.js —— MediaInfo 页
 
 import { invoke, openPath, pickFile } from '../bridge.js';
-import { $, toast } from '../components.js';
+import { $, toast, flashField, baseName } from '../components.js';
 
 let currentFile = '';
 
@@ -46,5 +46,9 @@ export async function analyze(path) {
 }
 
 export function handleDrop(paths) {
-  if (paths[0]) analyze(paths[0]);
+  if (paths[0]) {
+    flashField($('#miText'));
+    toast(`正在分析：${baseName(paths[0])}`);
+    analyze(paths[0]);
+  }
 }

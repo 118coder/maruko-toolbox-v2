@@ -298,6 +298,37 @@ input[type="checkbox"], input[type="radio"] {
 
 /* ---------- 拖放提示字段 ---------- */
 .field.hint { color: var(--text-dim); }
+.listbox.drop-hot { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
+textarea.field.drop-hot { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 拖放成功闪光反馈 */
+@keyframes dropflash {
+  0% { box-shadow: 0 0 0 0 var(--accent-soft); border-color: var(--accent); background: var(--accent-soft); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+.field.drop-flash, .listbox.drop-flash { animation: dropflash .7s ease-out; }
+
+/* ---------- 全窗拖放提示层 ---------- */
+#dropOverlay {
+  display: none;
+  position: fixed; inset: 0;
+  z-index: 90;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  pointer-events: none; /* 纯视觉：不拦截命中测试与原生拖放 */
+}
+#dropOverlay.show { display: block; }
+#dropOverlay .drop-frame {
+  position: absolute; inset: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 15px; font-weight: 600;
+}
+#dropOverlay .drop-ico { font-size: 34px; line-height: 1; }
 
 /* ---------- 进度浮层 ---------- */
 .overlay {
