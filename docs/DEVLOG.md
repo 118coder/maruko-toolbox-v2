@@ -230,3 +230,9 @@ x265 无 x264 那样的首遍自动降速机制。实测 x265 4.3：pass1 `--pre
 **回归**：maruko-core 75 单测全过（+1 read_text_any）；cargo check / release 构建通过；新 exe 已部署 dist\小丸工具箱V2现代版1.1.exe；启动冒烟测试正常（04:28 日志无前端错误）。
 
 **遗留**：拖放悬停高亮与命中测试依赖 Tauri 物理像素 ÷ devicePixelRatio，若 Windows 多屏异 DPI 跨屏拖动可能出现命中偏移一个屏的比例误差（矩形兜底可部分缓解）；一图流「复制音频」对非 AAC 音频编码的 m4a 仍建议关闭（ffmpeg copy 容器兼容性，非本轮范围）。
+
+### v1.2 发布记录（2026-11-13）
+
+**发布链路**：分支 release/v1.2 推送 → PR #3 → 合并 main（cc6642e）→ tag v1.2 → GitHub Release 双资产（完整版 `MarukoV2-v1.2-full.zip` 186.4MB + 更新包 `MarukoV2-update.zip` 3.1MB）。版本号 1.1 → 1.2 全量同步：tauri.conf、窗口标题、启动画面、关于页、VERSION 常量、pack_full.py 产物名；dist 内主程序改名「小丸工具箱V2现代版1.2.exe」。
+
+**网络排障备忘**：本次 github.com:443 被解析到不可达 IP（20.247.166.64），而 api.github.com/uploads.github.com 直连正常。git push 用临时本地 CONNECT 转发器（127.0.0.1:18443 → 140.82.112.3:443，TLS SNI 保持 github.com）完成，PR/合并/Release/资产上传全部走 api.github.com / uploads.github.com 直连 + `git credential fill` 提取 PAT。转发器与临时文件已清理；后续再遇同样问题可复用此法（候选 IP：140.82.112.3 / 140.82.121.3 / 20.27.177.113，均可 443 直连）。
