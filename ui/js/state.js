@@ -76,6 +76,11 @@ export function audioEncoderTag(id) {
   return ({ neroaac: 'nero', qaac: 'qaac', fdkaac: 'fdk', lame: 'lame', flac: 'flac', ffmpeg_aac: 'aac' })[id] || 'audio';
 }
 
+/** 音频编码器输出扩展名（与后端 cli::audio::output_ext 对齐） */
+export function audioOutputExt(id) {
+  return ({ lame: 'mp3', flac: 'flac', ac3: 'ac3', eac3: 'eac3', opus: 'opus' })[id] || 'm4a';
+}
+
 /** 源目录 + 名 + 标签 + 扩展名 */
 export function taggedName(input, tag, ext) {
   if (!input) return '';

@@ -213,6 +213,23 @@ pub fn write_text_ansi(path: &str, content: &str) -> Result<(), String> {
     write_script_ansi(path, content)
 }
 
+/// 读取文本文件：UTF-8 有效则原样返回；否则按 GBK 容错解码
+/// （AVS 脚本/记事本 ANSI 编码常见）。两种都无法表示时返回错误。
+pub fn read_text_any(path: &str) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}：{}", path, e))?;
+    match String::from_utf8(bytes.clone()) {
+        Ok(s) => Ok(s),
+        Err(_) => {
+            let (s, _, had_errors) = encoding_rs::GBK.decode(&bytes);
+            if had_errors {
+                Err("无法解码文本（既非 UTF-8，也无法按 GBK 解码）".into())
+            } else {
+                Ok(s.into_owned())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +251,31 @@ mod tests {
         write_script_ansi(p2.to_str().unwrap(), "path \u{1F600}\n").unwrap();
         let b2 = std::fs::read(&p2).unwrap();
         assert!(b2.windows(4).any(|w| w == [0xF0, 0x9F, 0x98, 0x80]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_read_text_any() {
+        let dir = std::env::temp_dir().join("maruko-avs-read-test");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // UTF-8 文件原样读取
+        let p1 = dir.join("u8.avs");
+        std::fs::write(&p1, "小丸 UTF-8\n").unwrap();
+        assert_eq!(read_text_any(p1.to_str().unwrap()).unwrap(), "小丸 UTF-8\n");
+
+        // GBK（ANSI）文件：0x81 0x40 是合法 GBK（"丂"）但不是合法 UTF-8
+        //（0x40 不是 UTF-8 续字节）→ 走 GBK 解码路径。注意多数常用 GBK 双字节
+        //（如 0xD0 0xA1）恰好也是合法 UTF-8，按 UTF-8 优先策略会原样解码，属预期行为。
+        let p2 = dir.join("gbk.avs");
+        std::fs::write(&p2, [0x81, 0x40, b'\n']).unwrap();
+        assert_eq!(read_text_any(p2.to_str().unwrap()).unwrap(), "丂\n");
+
+        // 纯 ASCII 在两种编码下一致
+        let p3 = dir.join("ascii.avs");
+        std::fs::write(&p3, b"LoadPlugin(\"x\")\n").unwrap();
+        assert_eq!(read_text_any(p3.to_str().unwrap()).unwrap(), "LoadPlugin(\"x\")\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

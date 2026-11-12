@@ -2,9 +2,10 @@
 // 滤镜以结构化对象传给后端（后端按 D6 顺序拼脚本）；脚本框非空时原样使用。
 
 import { invoke, pickFile, convertFileSrc } from '../bridge.js';
-import { $, bindFileField, toast } from '../components.js';
+import { $, bindFileField, toast, setFieldValue, flashField, isAudioFile, isAvsFile, baseName, withDebounce } from '../components.js';
 import { state, encoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
+import { submitAudioEncode } from './video.js';
 
 export function initAvs() {
   bindFileField($('#sVideo'), { kind: 'video', title: '选择视频' });
@@ -68,15 +69,17 @@ export function initAvs() {
     $('#previewOverlay').classList.remove('show');
   });
 
-  $('#sGo').addEventListener('click', async () => {
-    if (!$('#sVideo').value) return toast('请先选择视频', 'err');
+  $('#sGo').addEventListener('click', withDebounce(async () => {
+    if (!$('#sVideo').value) { toast('请先选择视频', 'err'); $('#sVideo').focus(); return; }
+    // 音频文件（如 m4a/mp3）自动转音频压制
+    if (isAudioFile($('#sVideo').value)) return submitAudioEncode($('#sVideo').value, '（来自 AVS 页）');
     try {
       const id = await invoke('encode_video', { job: buildJob() });
       trackJob(id);
     } catch (e) {
       toast(String(e), 'err');
     }
-  });
+  }));
 }
 
 /** 脚本文本：手动脚本原样；否则返回由勾选滤镜生成的"滤镜部分"（不含 Source 行） */
@@ -151,12 +154,38 @@ function buildJob() {
   };
 }
 
-export function handleDrop(paths) {
-  if (paths[0]) {
-    if (/\.(ass|ssa|srt)$/i.test(paths[0])) $('#sSub').value = paths[0];
-    else {
-      $('#sVideo').value = paths[0];
-      $('#sVideo').dispatchEvent(new Event('change'));
-    }
+export function handleDrop(paths, target) {
+  const first = paths[0];
+  if (!first) return;
+  // .avs 脚本：直接读取进脚本框（作为源文件走 LWLibavVideoSource 会失败，脚本框是唯一有用途径）
+  if (isAvsFile(first)) {
+    loadAvsScript(first);
+    return;
+  }
+  if (/\.(ass|ssa|srt)$/i.test(first)) {
+    if (target === 'sVideo') { toast('字幕文件已放入字幕栏', 'ok'); }
+    setFieldValue($('#sSub'), first);
+    flashField($('#sSub'));
+    toast(`已添加字幕：${baseName(first)}`, 'ok');
+    return;
+  }
+  if (isAudioFile(first)) {
+    toast('这是音频文件：压制请到「音频」页，或到「视频」页自动转音频压制', 'err');
+    return;
+  }
+  setFieldValue($('#sVideo'), first);
+  flashField($('#sVideo'));
+  toast(`已添加视频：${baseName(first)}`, 'ok');
+}
+
+/** 读取 .avs 脚本内容到脚本框（后端 UTF-8/GBK 容错解码） */
+async function loadAvsScript(path) {
+  try {
+    const text = await invoke('read_text_file', { path });
+    $('#sScript').value = text;
+    flashField($('#sScript'));
+    toast(`已读取 AVS 脚本：${baseName(path)}`, 'ok');
+  } catch (e) {
+    toast(`读取脚本失败：${e}`, 'err');
   }
 }

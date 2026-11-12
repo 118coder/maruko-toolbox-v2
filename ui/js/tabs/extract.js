@@ -1,7 +1,7 @@
 // tabs/extract.js —— 抽取页
 
 import { invoke } from '../bridge.js';
-import { $, bindFileField, toast } from '../components.js';
+import { $, bindFileField, toast, setFieldValue, flashField, isAudioFile, baseName, withDebounce } from '../components.js';
 import { trackJob } from '../jobs.js';
 
 export function initExtract() {
@@ -12,16 +12,18 @@ export function initExtract() {
   $('#fPickVideo').addEventListener('click', () => $('#fVideo').click());
   $('#kPickVideo').addEventListener('click', () => $('#kVideo').click());
 
-  const runCommon = (kind, index) => async () => {
+  const runCommon = (kind, index) => withDebounce(async () => {
     const p = $('#eVideo').value;
-    if (!p) return toast('请先选择视频', 'err');
+    if (!p) { toast('请先选择视频', 'err'); $('#eVideo').focus(); return; }
+    // 音频文件没有视频流：抽取视频必然失败，提前给出明确提示
+    if (kind === 'video' && isAudioFile(p)) return toast('这是音频文件（无视频流），只能抽取音频', 'err');
     try {
       const id = await invoke('extract_common', { path: p, kind, index });
       trackJob(id);
     } catch (e) {
       toast(String(e), 'err');
     }
-  };
+  });
   $('#eAudio1').addEventListener('click', runCommon('audio', 1));
   $('#eAudio2').addEventListener('click', runCommon('audio', 2));
   $('#eAudio3').addEventListener('click', runCommon('audio', 3));
@@ -78,7 +80,17 @@ function trackExt(t) {
 export function handleDrop(paths, target) {
   const p = paths[0];
   if (!p) return;
-  if (target === 'fVideo' || /\.flv$/i.test(p)) $('#fVideo').value = p;
-  else if (target === 'kVideo' || /\.mkv$/i.test(p)) $('#kVideo').value = p;
-  else $('#eVideo').value = p;
+  let dest;
+  if (target === 'fVideo') dest = $('#fVideo');
+  else if (target === 'kVideo') dest = $('#kVideo');
+  else if (target === 'eVideo') {
+    // 页面默认落点（或明确 eVideo）：按扩展名分流到对应分组
+    if (/\.flv$/i.test(p)) dest = $('#fVideo');
+    else if (/\.mkv$/i.test(p)) dest = $('#kVideo');
+    else dest = $('#eVideo');
+  } else dest = $('#eVideo');
+  if (isAudioFile(p)) toast('音频文件没有视频流：仅可「抽取音频」，抽取视频会失败', 'err');
+  setFieldValue(dest, p);
+  flashField(dest);
+  toast(`已添加：${baseName(p)}`, 'ok');
 }

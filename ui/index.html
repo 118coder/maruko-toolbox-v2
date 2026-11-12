@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>小丸工具箱V2现代版1.1</title>
+<title>小丸工具箱V2现代版1.2</title>
 <link rel="stylesheet" href="css/theme.css" />
 </head>
 <body>
@@ -36,7 +36,7 @@
     <section class="tab-page active" id="tab-video">
       <div class="group">
         <div class="row">
-          <input class="field hint" id="vVideo" readonly placeholder="可以把文件拖拽到这里" />
+          <input class="field hint" id="vVideo" data-drop readonly placeholder="可以把文件拖拽到这里" />
           <button class="btn" id="vPickVideo">视频</button>
         </div>
         <div class="row">
@@ -44,7 +44,7 @@
           <button class="btn" id="vPickOutput">输出</button>
         </div>
         <div class="row">
-          <input class="field hint" id="vSubtitle" readonly placeholder="双击清空字幕文件文本框" />
+          <input class="field hint" id="vSubtitle" data-drop readonly placeholder="双击清空字幕文件文本框" />
           <button class="btn" id="vPickSubtitle">字幕</button>
         </div>
         <div class="row">
@@ -70,10 +70,10 @@
         </div>
         <div class="row">
           <span class="lbl">起始帧</span>
-          <span class="num" data-step="1"><input id="vStart" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="1" data-min="0"><input id="vStart" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
           <span class="lbl">编码帧数</span>
-          <span class="num" data-step="1"><input id="vFrames" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="1" data-min="0"><input id="vFrames" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
         </div>
         <!-- Voukoder 风格专业编码器参数面板（按所选编码器显示） -->
@@ -90,7 +90,7 @@
               <option value="4444xq">4444 XQ</option>
             </select>
             <span class="lbl">质量 qscale</span>
-            <span class="num" data-step="1"><input id="pProResQ" value="9" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+            <span class="num" data-step="1" data-min="1" data-max="31"><input id="pProResQ" value="9" /><span class="btns"><button>▲</button><button>▼</button></span></span>
             <span class="lbl" style="color:var(--text-dim)">（1-31，越低质量越高）</span>
           </div>
           <div class="row" id="row-cfhd">
@@ -188,7 +188,7 @@
         </div>
         <div class="row">
           <span class="lbl" style="margin-left:26px">CRF</span>
-          <span class="num" data-step="0.1" data-dec="1"><input id="vCrf" value="23.5" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="0.1" data-dec="1" data-min="0"><input id="vCrf" value="23.5" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="lbl" style="margin-left:18px">宽度</span>
           <span class="num" data-step="1"><input id="vWidth" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <label class="ck"><input type="checkbox" id="vKeepRes" checked />保持原分辨率</label>
@@ -204,7 +204,7 @@
       <div class="group">
         <div class="group-title">批量压制</div>
         <div class="row" style="align-items:stretch">
-          <div class="listbox" id="vBatch" data-empty="（把视频文件拖到这里，或点添加）"></div>
+          <div class="listbox" id="vBatch" data-drop data-empty="（把视频文件拖到这里，或点添加）"></div>
           <div style="display:flex;flex-direction:column;gap:6px;flex:none">
             <button class="btn" id="vBatchOut">输出路径</button>
             <button class="btn" id="vBatchAdd">添加</button>
@@ -238,7 +238,7 @@
       <div class="group">
         <div class="group-title">音频压制</div>
         <div class="row">
-          <input class="field hint" id="aInput" readonly placeholder="可以把音频文件拖拽到这里" />
+          <input class="field hint" id="aInput" data-drop readonly placeholder="可以把音频文件拖拽到这里" />
           <button class="btn" id="aPickInput">输入</button>
         </div>
         <div class="row">
@@ -275,7 +275,7 @@
       <div class="group">
         <div class="group-title">批量压制</div>
         <div class="row" style="min-height:180px;align-items:stretch">
-          <div class="listbox" id="aBatch" data-empty="（把音频文件拖到这里，或点添加）"></div>
+          <div class="listbox" id="aBatch" data-drop data-empty="（把音频文件拖到这里，或点添加）"></div>
         </div>
         <div class="row">
           <span class="lbl">新文件生成在源文件目录</span>
@@ -294,11 +294,11 @@
       <div class="group">
         <div class="group-title">一图流</div>
         <div class="row">
-          <input class="field hint" id="oImage" readonly placeholder="图片文件" />
+          <input class="field hint" id="oImage" data-drop readonly placeholder="图片文件（可拖入图片）" />
           <button class="btn" id="oPickImage">图片</button>
         </div>
         <div class="row">
-          <input class="field hint" id="oAudio" readonly placeholder="音频文件" />
+          <input class="field hint" id="oAudio" data-drop readonly placeholder="音频文件（可拖入音频）" />
           <button class="btn" id="oPickAudio">音频</button>
         </div>
         <div class="row">
@@ -307,20 +307,20 @@
         </div>
         <div class="row">
           <span class="lbl">音频码率</span>
-          <span class="num" data-step="32"><input id="oBitrate" value="128" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="32" data-min="8"><input id="oBitrate" value="128" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="lbl">Kbps</span>
           <span class="spacer"></span>
           <span class="lbl">FPS</span>
-          <span class="num" data-step="1"><input id="oFps" value="1" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="1" data-min="0.1"><input id="oFps" value="1" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
           <span class="lbl">CRF</span>
-          <span class="num" data-step="0.1" data-dec="1"><input id="oCrf" value="24.0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="0.1" data-dec="1" data-min="0"><input id="oCrf" value="24.0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
           <button class="btn primary" id="oGo">压制</button>
         </div>
         <div class="row">
           <span class="lbl" style="margin-left:64px">时间</span>
-          <span class="num" data-step="10"><input id="oDuration" value="120" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="num" data-step="10" data-min="1"><input id="oDuration" value="120" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="lbl">秒</span>
           <span class="spacer"></span>
           <label class="ck"><input type="checkbox" id="oCopyAudio" />复制音频</label>
@@ -330,7 +330,7 @@
       <div class="group">
         <div class="group-title">其他</div>
         <div class="row">
-          <input class="field hint" id="cVideo" readonly placeholder="视频文件" />
+          <input class="field hint" id="cVideo" data-drop readonly placeholder="视频文件（可拖入视频）" />
           <button class="btn" id="cPickVideo">视频</button>
         </div>
         <div class="row">
@@ -367,11 +367,11 @@
       <div class="group">
         <div class="group-title">合并为MP4</div>
         <div class="row">
-          <input class="field hint" id="m4Video" readonly placeholder="视频文件" />
+          <input class="field hint" id="m4Video" data-drop readonly placeholder="视频文件" />
           <button class="btn" id="m4PickVideo">视频</button>
         </div>
         <div class="row">
-          <input class="field hint" id="m4Audio" readonly placeholder="音频文件" />
+          <input class="field hint" id="m4Audio" data-drop readonly placeholder="音频文件" />
           <button class="btn" id="m4PickAudio">音频</button>
         </div>
         <div class="row">
@@ -399,15 +399,15 @@
       <div class="group">
         <div class="group-title">合并为MKV</div>
         <div class="row">
-          <input class="field hint" id="mkVideo" readonly placeholder="视频文件" />
+          <input class="field hint" id="mkVideo" data-drop readonly placeholder="视频文件" />
           <button class="btn" id="mkPickVideo">视频</button>
         </div>
         <div class="row">
-          <input class="field hint" id="mkAudio" readonly placeholder="音频文件" />
+          <input class="field hint" id="mkAudio" data-drop readonly placeholder="音频文件" />
           <button class="btn" id="mkPickAudio">音频</button>
         </div>
         <div class="row">
-          <input class="field hint" id="mkSub" readonly placeholder="字幕文件" />
+          <input class="field hint" id="mkSub" data-drop readonly placeholder="字幕文件" />
           <button class="btn" id="mkPickSub">字幕</button>
         </div>
         <div class="row">
@@ -423,7 +423,7 @@
       <div class="group">
         <div class="group-title">封装转换</div>
         <div class="row" style="min-height:110px;align-items:stretch">
-          <div class="listbox" id="cvBatch" data-empty="（添加要转换封装的文件）"></div>
+          <div class="listbox" id="cvBatch" data-drop data-empty="（添加要转换封装的文件）"></div>
           <div style="display:flex;flex-direction:column;gap:6px;flex:none">
             <button class="btn" id="cvAdd">添加</button>
             <button class="btn" id="cvDel">删除</button>
@@ -454,7 +454,7 @@
       <div class="group">
         <div class="group-title">所有格式</div>
         <div class="row">
-          <input class="field hint" id="eVideo" readonly placeholder="抽取的视频或音频在原视频目录下" />
+          <input class="field hint" id="eVideo" data-drop readonly placeholder="抽取的视频或音频在原视频目录下" />
           <button class="btn" id="ePickVideo">视频</button>
         </div>
         <div class="row" style="justify-content:flex-end">
@@ -468,7 +468,7 @@
       <div class="group">
         <div class="group-title">FLV</div>
         <div class="row">
-          <input class="field hint" id="fVideo" readonly placeholder="抽取的视频或音频在原视频目录下" />
+          <input class="field hint" id="fVideo" data-drop readonly placeholder="抽取的视频或音频在原视频目录下" />
           <button class="btn" id="fPickVideo">视频</button>
         </div>
         <div class="row" style="justify-content:flex-end">
@@ -480,7 +480,7 @@
       <div class="group">
         <div class="group-title">MKV</div>
         <div class="row">
-          <input class="field hint" id="kVideo" readonly placeholder="抽取的视频或音频在原视频目录下" />
+          <input class="field hint" id="kVideo" data-drop readonly placeholder="抽取的视频或音频在原视频目录下" />
           <button class="btn" id="kPickVideo">视频</button>
         </div>
         <div class="row">
@@ -499,11 +499,11 @@
     <section class="tab-page" id="tab-avs">
       <div class="group">
         <div class="row">
-          <input class="field hint" id="sVideo" readonly placeholder="视频文件" />
+          <input class="field hint" id="sVideo" data-drop readonly placeholder="视频文件" />
           <button class="btn" id="sPickVideo">视频</button>
         </div>
         <div class="row">
-          <input class="field hint" id="sSub" readonly placeholder="字幕文件（双击清空）" />
+          <input class="field hint" id="sSub" data-drop readonly placeholder="字幕文件（双击清空）" />
           <button class="btn" id="sPickSub">字幕</button>
         </div>
         <div class="row">
@@ -520,9 +520,9 @@
         </div>
         <div class="row">
           <label class="ck" style="width:150px"><input type="checkbox" id="fResize" />LanczosResize</label>
-          <span class="lbl">宽度</span><span class="num" data-step="1"><input id="fW" value="1280" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="lbl">宽度</span><span class="num" data-step="1" data-min="16"><input id="fW" value="1280" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
-          <span class="lbl">高度</span><span class="num" data-step="1"><input id="fH" value="720" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="lbl">高度</span><span class="num" data-step="1" data-min="16"><input id="fH" value="720" /><span class="btns"><button>▲</button><button>▼</button></span></span>
         </div>
         <div class="row">
           <label class="ck" style="width:150px"><input type="checkbox" id="fBorders" />AddBorders 黑边</label>
@@ -538,9 +538,9 @@
         </div>
         <div class="row">
           <label class="ck" style="width:150px"><input type="checkbox" id="fTrim" />Trim 截取</label>
-          <span class="lbl">起始帧</span><span class="num" data-step="1"><input id="fTrimS" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="lbl">起始帧</span><span class="num" data-step="1" data-min="0"><input id="fTrimS" value="0" /><span class="btns"><button>▲</button><button>▼</button></span></span>
           <span class="spacer"></span>
-          <span class="lbl">结束帧</span><span class="num" data-step="1"><input id="fTrimE" value="1440" /><span class="btns"><button>▲</button><button>▼</button></span></span>
+          <span class="lbl">结束帧</span><span class="num" data-step="1" data-min="0"><input id="fTrimE" value="1440" /><span class="btns"><button>▲</button><button>▼</button></span></span>
         </div>
         <div class="row">
           <label class="ck" style="width:150px"><input type="checkbox" id="fLevels" />Levels 亮度</label>
@@ -559,7 +559,7 @@
           <button class="btn" id="fInsert">插入</button>
         </div>
         <div class="row">
-          <textarea class="field mono" id="sScript" rows="10" placeholder="可直接把AVS脚本粘贴到这里"></textarea>
+          <textarea class="field mono" id="sScript" data-drop rows="10" placeholder="可直接把AVS脚本粘贴到这里（或拖入 .avs 文件）"></textarea>
         </div>
         <div class="row">
           <button class="btn" id="sClear">清空</button>
@@ -585,7 +585,7 @@
     <!-- ============ MediaInfo ============ -->
     <section class="tab-page fill" id="tab-mediainfo">
       <div class="group" style="height:calc(100% - 52px);display:flex;flex-direction:column">
-        <textarea class="field mono" id="miText" style="flex:1;height:100%" placeholder="请把多媒体文件拖到这里" readonly></textarea>
+        <textarea class="field mono" id="miText" data-drop style="flex:1;height:100%" placeholder="请把多媒体文件拖到这里" readonly></textarea>
         <div class="row" style="margin-top:8px;justify-content:flex-end">
           <button class="btn" id="miCopy">复制信息</button>
           <button class="btn" id="miPlay">播放视频</button>
@@ -675,7 +675,7 @@
     <section class="tab-page" id="tab-help">
       <div class="group help-doc">
         <h4>关于</h4>
-        <p>小丸工具箱V2现代版1.1 · 在原版 r236 界面与工作流基础上的现代化重实现：
+        <p>小丸工具箱V2现代版1.2 · 在原版 r236 界面与工作流基础上的现代化重实现：
         GitHub 开源地址：<a href="https://github.com/118coder/maruko-toolbox-v2" id="hRepoLink">https://github.com/118coder/maruko-toolbox-v2</a>。
         GPU 硬件编码（NVENC / QuickSync / AMF 自动探测）、扁平双主题界面、高分屏清晰渲染。
         压制行为依赖本机安装的原版小丸工具箱工具链（x264/x265/ffmpeg/MP4Box/MKVToolNix/AviSynth 等），在此向各工具作者致谢。</p>
@@ -762,6 +762,14 @@
   <div class="shutdownbar" id="shutdownbar">
     <span>⚠ 将在 60 秒后自动关机</span>
     <button class="btn small" id="shutdowncancel">取消关机</button>
+  </div>
+
+  <!-- 全窗拖放提示层（仅视觉反馈，pointer-events:none 不挡拖放命中） -->
+  <div id="dropOverlay">
+    <div class="drop-frame">
+      <div class="drop-ico">⤓</div>
+      <div>松开以添加文件</div>
+    </div>
   </div>
 
   <div id="toasts"></div>

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter as _, Manager, State, Theme};
 
-pub const VERSION: &str = "1.1.0";
+pub const VERSION: &str = "1.2.0";
 /// 默认更新接口：本仓库 GitHub Releases（设置页可自定义，兼容旧 {version,url} 协议）
 pub const DEFAULT_UPDATE_API: &str = "https://api.github.com/repos/118coder/maruko-toolbox-v2/releases/latest";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -341,6 +341,7 @@ fn probe_video(state: &AppState, input: &str) -> Result<mediainfo::ProbeInfo, St
             duration: 0.0,
             fps: String::new(),
             has_audio: true,
+            has_video: true, // ffprobe 缺失时不做拦截，交由压制管线报错
             width: 0,
             height: 0,
             vcodec: String::new(),
@@ -379,15 +380,34 @@ pub fn resolve_batch_subtitle(video: &str, suffix: &str) -> Option<String> {
     None
 }
 
+/// prepare_video_job 的结果：正常视频上下文，或纯音频源自动转音频压制任务。
+enum Prepared {
+    Video(cli::video::VideoCtx, bool, f64),
+    AudioOnly(cli::audio::AudioJob),
+}
+
 /// 组装 VideoCtx：探测源、定输出、写字幕、生成/写入 AVS。
 fn prepare_video_job(
     state: &AppState,
     job: &mut VideoJob,
     subtitle_override: Option<String>,
-) -> Result<(cli::video::VideoCtx, bool, f64), String> {
+) -> Result<Prepared, String> {
     let settings = state.settings.lock().unwrap().clone();
     let tools = state.tools();
     let info = probe_video(state, &job.input)?;
+
+    // 纯音频源（如 m4a/mp3）进了视频管线：自动转音频压制（沿用任务携带的音频编码参数）
+    if !info.has_video {
+        let encoder = if job.audio_encoder.trim().is_empty() { "ffmpeg_aac".to_string() } else { job.audio_encoder.clone() };
+        return Ok(Prepared::AudioOnly(cli::audio::AudioJob {
+            input: job.input.clone(),
+            output: String::new(), // 留空：按「源名+编码器标签+扩展名」自动命名
+            encoder,
+            mode: "bitrate".into(),
+            bitrate: if job.audio_bitrate > 0 { job.audio_bitrate } else { 128 },
+            custom: String::new(),
+        }));
+    }
 
     // 输出命名：空 → 源目录/名+编码器标签+容器（测试.mp4 → 测试x264.mp4）；
     // 非空 → 防覆盖冲突（存在则 _2/_3）
@@ -479,7 +499,24 @@ fn prepare_video_job(
         // 由 encode 阶段的 Plan.fallback 自动回退软解，无需预检
         hwaccel: gpu && cli::video::hwaccel_eligible(&job.encoder, &info.vcodec, job.subtitle.is_empty()),
     };
-    Ok((ctx, info.has_audio, info.duration))
+    Ok(Prepared::Video(ctx, info.has_audio, info.duration))
+}
+
+/// 纯音频源自动转音频压制的统一提交入口（encode_video / encode_video_batch 共用）。
+fn submit_audio_only(state: &AppState, ajob: &cli::audio::AudioJob) -> Result<u32, String> {
+    let tools = state.tools().clone();
+    let temp_base = unique_temp(&temp_dir());
+    let steps = cli::audio::build_steps(ajob, &tools.tools_dir, &tools.ffmpeg, &temp_base)?;
+    let plan = cli::Plan {
+        title: format!("音频压制 {}（源无视频流，已自动转音频）", file_name(&ajob.input)),
+        output: ajob.output.clone(),
+        steps,
+        shutdown_after: false,
+        fallback: None,
+    };
+    let opts = run_opts(&state.settings.lock().unwrap());
+    maruko_core::logs::write(&format!("纯音频源自动转音频压制（input={} → {}）", ajob.input, ajob.output));
+    Ok(state.jobs.submit(plan, opts))
 }
 
 /// GPU 任务：硬解主计划 + 同参软解回退计划（NVDEC 不支持的源自动重试）。
@@ -504,16 +541,21 @@ fn file_name(p: &str) -> String {
 
 #[tauri::command]
 pub fn encode_video(state: State<AppState>, mut job: VideoJob) -> Result<u32, String> {
-    let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
-    let (ctx, has_audio, duration) = prepare_video_job(&state, &mut job, None)?;
-    let plan = if gpu {
-        gpu_plan_with_fallback(&job, &ctx, has_audio, duration)?
-    } else {
-        cli::video::build_soft_plan(&job, &ctx)?
-    };
+    let prepared = prepare_video_job(&state, &mut job, None)?;
     let opts = run_opts(&state.settings.lock().unwrap());
-    maruko_core::logs::write(&format!("提交视频任务（encoder={} mode={} input={}）", job.encoder, job.mode, job.input));
-    Ok(state.jobs.submit(plan, opts))
+    match prepared {
+        Prepared::AudioOnly(ajob) => submit_audio_only(&state, &ajob),
+        Prepared::Video(ctx, has_audio, duration) => {
+            let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
+            let plan = if gpu {
+                gpu_plan_with_fallback(&job, &ctx, has_audio, duration)?
+            } else {
+                cli::video::build_soft_plan(&job, &ctx)?
+            };
+            maruko_core::logs::write(&format!("提交视频任务（encoder={} mode={} input={}）", job.encoder, job.mode, job.input));
+            Ok(state.jobs.submit(plan, opts))
+        }
+    }
 }
 
 #[tauri::command]
@@ -521,14 +563,18 @@ pub fn encode_video_batch(state: State<AppState>, mut jobs: Vec<VideoJob>, subSu
     let opts = run_opts(&state.settings.lock().unwrap());
     let mut ids = Vec::new();
     for job in jobs.iter_mut() {
-        let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
-        let (ctx, has_audio, duration) = prepare_video_job(&state, job, Some(subSuffix.clone()))?;
-        let plan = if gpu {
-            gpu_plan_with_fallback(job, &ctx, has_audio, duration)?
-        } else {
-            cli::video::build_soft_plan(job, &ctx)?
-        };
-        ids.push(state.jobs.submit(plan, opts.clone()));
+        match prepare_video_job(&state, job, Some(subSuffix.clone()))? {
+            Prepared::AudioOnly(ajob) => ids.push(submit_audio_only(&state, &ajob)?),
+            Prepared::Video(ctx, has_audio, duration) => {
+                let gpu = cli::video::is_ffmpeg_encoder(&job.encoder);
+                let plan = if gpu {
+                    gpu_plan_with_fallback(job, &ctx, has_audio, duration)?
+                } else {
+                    cli::video::build_soft_plan(job, &ctx)?
+                };
+                ids.push(state.jobs.submit(plan, opts.clone()));
+            }
+        }
     }
     maruko_core::logs::write(&format!("提交批量视频任务 {} 条", ids.len()));
     Ok(ids)
@@ -753,6 +799,10 @@ pub fn one_pic(state: State<AppState>, mut job: clicommon::OnePicJob) -> Result<
 #[tauri::command]
 pub fn cut_video(state: State<AppState>, mut job: clicommon::CutJob) -> Result<u32, String> {
     let tools = state.tools().clone();
+    // 纯音频文件（如 m4a）没有视频流：给出明确提示而非莫名的转码失败
+    if !probe_video(&state, &job.input)?.has_video {
+        return Err("这是纯音频文件（如 m4a/mp3），无法截取视频；压制请到「音频」页".into());
+    }
     if job.output.is_empty() {
         let ext = PathBuf::from(&job.input)
             .extension()
@@ -768,6 +818,9 @@ pub fn cut_video(state: State<AppState>, mut job: clicommon::CutJob) -> Result<u
 #[tauri::command]
 pub fn rotate_video(state: State<AppState>, mut job: clicommon::RotateJob) -> Result<u32, String> {
     let tools = state.tools().clone();
+    if !probe_video(&state, &job.input)?.has_video {
+        return Err("这是纯音频文件（如 m4a/mp3），无法旋转视频；压制请到「音频」页".into());
+    }
     if job.output.is_empty() {
         job.output = cli::auto_output(&job.input, "mp4", "rotated");
     }
@@ -788,6 +841,16 @@ pub fn save_avs(path: String, content: String) -> Result<(), String> {
     maruko_core::avs::write_script_ansi(&path, &content).map_err(|e| format!("保存 AVS 失败：{}", e))
 }
 
+/// 读取文本文件（UTF-8 优先，GBK 容错解码）：.avs 脚本拖入脚本框用。
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > 8 * 1024 * 1024 {
+        return Err("文件过大（>8MB），请直接粘贴内容".into());
+    }
+    maruko_core::avs::read_text_any(&path)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvsPreviewResult {
@@ -804,6 +867,9 @@ pub fn avs_preview(state: State<AppState>, mut job: VideoJob) -> AvsPreviewResul
         Ok(i) => i,
         Err(e) => return AvsPreviewResult { ok: false, path: String::new(), error: format!("探测源失败：{}", e) },
     };
+    if !info.has_video {
+        return AvsPreviewResult { ok: false, path: String::new(), error: "该文件没有视频流（如 m4a/mp3 音频），无法 AVS 预览；压制请到「视频」页（会自动转音频压制）".into() };
+    }
     if tools.tools_dir.is_empty() {
         return AvsPreviewResult { ok: false, path: String::new(), error: "未找到工具链目录".into() };
     }

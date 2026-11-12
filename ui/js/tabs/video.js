@@ -1,11 +1,37 @@
 // tabs/video.js —— 视频压制页
 
 import { invoke } from '../bridge.js';
-import { $, bindFileField, makeListBox, initNumBoxes, toast, setFieldValue } from '../components.js';
-import { state, videoEncoderOptions, isGpu, isProEncoder, saveSettings, encoderTag, taggedName } from '../state.js';
+import { $, bindFileField, makeListBox, initNumBoxes, toast, setFieldValue, flashField, withDebounce, isSubFile, isAudioFile, baseName } from '../components.js';
+import { state, videoEncoderOptions, isGpu, isProEncoder, saveSettings, encoderTag, taggedName, audioEncoderTag, audioOutputExt } from '../state.js';
 import { trackJob } from '../jobs.js';
 
 let batch;
+
+/** 选一个实际可用的音频编码器（共享设置优先；不可用则退回首个可用项/ffmpeg aac） */
+function pickAudioEncoder() {
+  const list = (state.tools?.audioEncoders || []).filter((e) => e.available);
+  return list.find((e) => e.id === state.audio.encoder)?.id || list[0]?.id || 'ffmpeg_aac';
+}
+
+/** 纯音频文件（如 m4a/mp3）进了视频管线：自动转为音频压制任务（全格式压制支持）。AVS 页复用。 */
+export async function submitAudioEncode(input, note = '') {
+  const encoder = pickAudioEncoder();
+  const job = {
+    input,
+    output: taggedName(input, audioEncoderTag(encoder), audioOutputExt(encoder)),
+    encoder,
+    mode: 'bitrate',
+    bitrate: state.audio.bitrate,
+    custom: state.audio.custom || '',
+  };
+  try {
+    const id = await invoke('encode_audio', { job });
+    toast(`已识别为音频文件，自动转音频压制${note}（编码器：${audioEncoderTag(encoder)} · 码率：${state.audio.bitrate}k，参数在「音频参数」中设置）`, 'ok');
+    trackJob(id);
+  } catch (e) {
+    toast(String(e), 'err');
+  }
+}
 
 export function initVideo() {
   // 文件字段
@@ -35,23 +61,30 @@ export function initVideo() {
   syncProPanel();
 
   // 编码器下拉（工具信息加载后由 refreshEncoders 填充）
-  // 模式切换：CRF ⇄ 码率 共用同一个数字框
+  // 模式切换：CRF ⇄ 码率 记住各自上次值（切换来回不丢设置）
+  let lastCrf = '23.5';
+  let lastBitrate = '800';
   for (const r of document.querySelectorAll('input[name=vmode]')) {
     r.addEventListener('change', () => {
       const m = document.querySelector('input[name=vmode]:checked').value;
       const lbl = $('#vCrf')?.closest('.row')?.querySelector('.lbl');
       if (m === 'bitrate') {
         lbl.textContent = '码率';
-        $('#vCrf').value = '800';
-        for (const c of ['#vCrf', ...[]]) {}
+        $('#vCrf').value = lastBitrate;
         $('#vCrf').dataset.step = '100';
       } else {
         lbl.textContent = 'CRF';
-        $('#vCrf').value = '23.5';
+        $('#vCrf').value = lastCrf;
         $('#vCrf').dataset.step = '0.1';
       }
     });
   }
+  // 记录当前模式下的输入值（切走前保存）
+  $('#vCrf').addEventListener('change', () => {
+    const m = document.querySelector('input[name=vmode]:checked').value;
+    if (m === 'bitrate') lastBitrate = $('#vCrf').value;
+    else lastCrf = $('#vCrf').value;
+  });
 
   // 音频参数弹窗
   $('#vAudioParams').addEventListener('click', () => {
@@ -71,18 +104,26 @@ export function initVideo() {
   });
   $('#vAudioMode').addEventListener('change', () => { state.audio.mode = $('#vAudioMode').value; });
 
-  // 单个压制
-  $('#vEncode').addEventListener('click', async () => {
+  // 单个压制（防手滑双击；音频文件自动转音频压制；提交前校验）
+  $('#vEncode').addEventListener('click', withDebounce(async () => {
     const input = $('#vVideo').value;
-    if (!input) return toast('请先选择视频文件', 'err');
-    const job = buildJob(input, $('#vOutput').value || '');
+    if (!input) { toast('请先选择视频文件（可拖入）', 'err'); $('#vVideo').focus(); return; }
+    if (!state.tools?.toolsDir && !isGpu($('#vEncoder').value) && !isProEncoder($('#vEncoder').value)) {
+      return toast('未找到工具链目录：请到「设置」页指定原版小丸 tools 目录，或改用 GPU/专业编码器', 'err');
+    }
+    if (isAudioFile(input)) return submitAudioEncode(input);
+    const output = $('#vOutput').value || '';
+    if (output.replace(/[\\/]$/, '').toLowerCase() === input.toLowerCase()) {
+      return toast('输出文件与输入相同，已阻止（换一个输出路径）', 'err');
+    }
+    const job = buildJob(input, output);
     try {
       const id = await invoke('encode_video', { job });
       trackJob(id);
     } catch (e) {
       toast(String(e), 'err');
     }
-  });
+  }));
 
   // 批量
   batch = makeListBox($('#vBatch'));
@@ -100,26 +141,42 @@ export function initVideo() {
       toast(`批量输出路径：${d}`, 'ok');
     }
   });
-  $('#vBatchGo').addEventListener('click', async () => {
+  $('#vBatchGo').addEventListener('click', withDebounce(async () => {
     const files = batch.all();
     if (!files.length) return toast('批量列表为空', 'err');
     const container = $('#vContainer').value;
     const tag = encoderTag($('#vEncoder').value);
     const suffix = $('#vBurnSub').checked ? $('#vSubSuffix').value : 'none';
-    const jobs = files.map((f) => {
+    // 音频文件分流：批量里混入的 m4a/mp3 等自动转音频压制任务
+    const aJobs = [];
+    const vJobs = [];
+    for (const f of files) {
+      if (isAudioFile(f)) {
+        const enc = pickAudioEncoder();
+        aJobs.push({ input: f, output: taggedName(f, audioEncoderTag(enc), audioOutputExt(enc)), encoder: enc, mode: 'bitrate', bitrate: state.audio.bitrate, custom: state.audio.custom || '' });
+        continue;
+      }
       const stem = f.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
       const out = state.batchOutputDir
         ? state.batchOutputDir.replace(/[\\/]+$/, '') + '\\' + stem + tag + '.' + container
         : taggedName(f, tag, container);
-      return buildJob(f, out, container);
-    });
+      if (out.replace(/[\\/]$/, '').toLowerCase() === f.toLowerCase()) {
+        return toast(`输出与输入相同：${baseName(f)}，已阻止`, 'err');
+      }
+      vJobs.push(buildJob(f, out, container));
+    }
     try {
-      const ids = await invoke('encode_video_batch', { jobs, subSuffix: suffix });
+      const ids = [];
+      if (vJobs.length) ids.push(...await invoke('encode_video_batch', { jobs: vJobs, subSuffix: suffix }));
+      if (aJobs.length) {
+        ids.push(...await invoke('encode_audio_batch', { jobs: aJobs }));
+        toast(`批量中 ${aJobs.length} 个音频文件已自动转音频压制`, 'ok');
+      }
       trackJob(ids[ids.length - 1]);
     } catch (e) {
       toast(String(e), 'err');
     }
-  });
+  }));
 }
 
 function isAutoOutput() {
@@ -314,21 +371,50 @@ export function refreshEncoders() {
   if (isAutoOutput()) autoFillOutput();
 }
 
-/** 全局拖放进入本页时：把文件路径分配到对应字段 */
+/** 全局拖放进入本页时：按命中字段与文件类型智能分配 */
 export function handleDrop(paths, target) {
-  const map = { vVideo: 'video', vBatch: 'batch', vSubtitle: 'subtitle' };
+  const first = paths[0];
+  if (!first) return;
+
+  // 字幕栏：只收字幕（拖错类型给出提示）
   if (target === 'vSubtitle') {
-    setFieldValue($('#vSubtitle'), paths[0]);
-  } else if (target === 'vBatch') {
-    for (const p of paths) batch.add(p);
-  } else if (target === 'vVideo' || target === 'vVideoAny') {
-    setFieldValue($('#vVideo'), paths[0]);
-    if (paths.length > 1) {
-      for (const p of paths) batch.add(p);
+    if (!isSubFile(first)) { toast('字幕栏请拖入 ass/ssa/srt 字幕文件', 'err'); return; }
+    setFieldValue($('#vSubtitle'), first);
+    flashField($('#vSubtitle'));
+    toast(`已添加字幕：${baseName(first)}`, 'ok');
+    return;
+  }
+  // 视频栏/批量栏收到字幕文件：智能识别自动进字幕栏
+  if (isSubFile(first) && (target === 'vVideo' || target === 'vBatch')) {
+    setFieldValue($('#vSubtitle'), first);
+    flashField($('#vSubtitle'));
+    toast(`已识别为字幕，添加到字幕栏：${baseName(first)}`, 'ok');
+    return;
+  }
+  if (target === 'vBatch') {
+    let subs = 0, added = 0;
+    for (const p of paths) {
+      if (isSubFile(p)) {
+        subs++;
+        if (!$('#vSubtitle').value) setFieldValue($('#vSubtitle'), p);
+        continue;
+      }
+      batch.add(p);
+      added++;
     }
-  } else {
-    // 默认：第一个进视频，其余进批量
-    setFieldValue($('#vVideo'), paths[0]);
-    for (const p of paths.slice(1)) batch.add(p);
+    toast(`已加入批量列表 ${added} 个文件${subs ? `（${subs} 个字幕已进字幕栏）` : ''}`, 'ok');
+    return;
+  }
+  // vVideo / 默认：第一个进视频栏，其余进批量（字幕文件除外）
+  if (isAudioFile(first)) toast('音频文件将在压制时自动转为音频压制', 'ok');
+  setFieldValue($('#vVideo'), first);
+  flashField($('#vVideo'));
+  toast(`已添加：${baseName(first)}`, 'ok');
+  for (const p of paths.slice(1)) {
+    if (isSubFile(p)) {
+      if (!$('#vSubtitle').value) setFieldValue($('#vSubtitle'), p);
+      continue;
+    }
+    batch.add(p);
   }
 }

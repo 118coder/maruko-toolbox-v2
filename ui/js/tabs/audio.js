@@ -1,7 +1,7 @@
 // tabs/audio.js —— 音频压制页
 
 import { invoke, pickFile } from '../bridge.js';
-import { $, bindFileField, makeListBox, toast } from '../components.js';
+import { $, bindFileField, makeListBox, toast, setFieldValue, flashField, isAudioFile, baseName, withDebounce } from '../components.js';
 import { state, saveSettings, audioEncoderTag, taggedName } from '../state.js';
 import { trackJob } from '../jobs.js';
 
@@ -60,9 +60,9 @@ export function initAudio() {
   };
   [sel, $('#aBitrate'), $('#aCustom')].forEach((e) => e.addEventListener('change', sync));
 
-  $('#aEncode').addEventListener('click', async () => {
+  $('#aEncode').addEventListener('click', withDebounce(async () => {
     const input = $('#aInput').value;
-    if (!input) return toast('请先选择音频文件', 'err');
+    if (!input) { toast('请先选择音频文件（可拖入）', 'err'); $('#aInput').focus(); return; }
     const job = buildJob(input, $('#aOutput').value || '');
     try {
       const id = await invoke('encode_audio', { job });
@@ -70,7 +70,7 @@ export function initAudio() {
     } catch (e) {
       toast(String(e), 'err');
     }
-  });
+  }));
 
   batch = makeListBox($('#aBatch'));
   $('#aBatchAdd').addEventListener('click', async () => {
@@ -79,17 +79,18 @@ export function initAudio() {
   });
   $('#aBatchDel').addEventListener('click', () => batch.removeSel());
   $('#aBatchClear').addEventListener('click', () => batch.clear());
-  $('#aBatchGo').addEventListener('click', async () => {
+  $('#aBatchGo').addEventListener('click', withDebounce(async () => {
     const files = batch.all();
     if (!files.length) return toast('批量列表为空', 'err');
     const jobs = files.map((f) => buildJob(f, ''));
     try {
       const ids = await invoke('encode_audio_batch', { jobs });
+      toast(`已提交 ${ids.length} 个音频压制任务`, 'ok');
       trackJob(ids[ids.length - 1]);
     } catch (e) {
       toast(String(e), 'err');
     }
-  });
+  }));
   $('#aMerge').addEventListener('click', async () => {
     const files = batch.all();
     if (files.length < 2) return toast('合并至少需要两个音频文件', 'err');
@@ -133,10 +134,17 @@ function buildJob(input, output) {
   };
 }
 
-export function handleDrop(paths) {
-  for (const p of paths) batch.add(p);
-  if (paths[0] && !$('#aInput').value) {
-    $('#aInput').value = paths[0];
-    $('#aInput').dispatchEvent(new Event('change'));
+export function handleDrop(paths, target) {
+  const audio = paths.filter(isAudioFile);
+  const skipped = paths.length - audio.length;
+  if (skipped) toast(`已跳过 ${skipped} 个非音频文件（音频压制仅支持音频）`, 'err');
+  if (!audio.length) return;
+  for (const p of audio) batch.add(p);
+  if (target === 'aInput' || !$('#aInput').value) {
+    setFieldValue($('#aInput'), audio[0]);
+    flashField($('#aInput'));
+    toast(`已添加：${baseName(audio[0])}`, 'ok');
+  } else {
+    toast(`已加入批量列表 ${audio.length} 个文件`, 'ok');
   }
 }

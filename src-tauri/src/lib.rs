@@ -123,6 +123,7 @@ pub fn run() {
             commands::cut_video,
             commands::rotate_video,
             commands::save_avs,
+            commands::read_text_file,
             commands::avs_preview,
             commands::job_cancel,
             commands::shutdown_cancel_cmd,
